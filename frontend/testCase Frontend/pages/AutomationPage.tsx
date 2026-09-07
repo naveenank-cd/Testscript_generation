@@ -14,6 +14,7 @@ import { downloadFile, friendlyError, friendlyId, loadActiveProjectName, registe
 export function AutomationPage() {
   const historyMode = useSearchParams().get('view') === 'history';
   const { workflowId, hydrate } = useTestCaseWorkflowStore();
+  const [projectName, setProjectName] = useState(() => (typeof window !== 'undefined' ? (loadActiveProjectName(workflowId || undefined) || '') : ''));
   const [applicationUrl, setApplicationUrl] = useState('');
   const [authenticationEmail, setAuthenticationEmail] = useState('');
   const [authenticationPassword, setAuthenticationPassword] = useState('');
@@ -50,6 +51,8 @@ export function AutomationPage() {
   useEffect(() => {
     if (workflowId) {
       setActiveProjectId(workflowId);
+      const activeName = loadActiveProjectName(workflowId);
+      if (activeName) setProjectName(activeName);
     }
     const scripts = generation?.scripts ?? [];
     registerFriendlyIds('script', scripts.map((script) => script.script_id), workflowId);
@@ -207,11 +210,12 @@ export function AutomationPage() {
       const authentication = authMode === 'credentials' && authenticationEmail.trim() && authenticationPassword
         ? { email: authenticationEmail.trim(), password: authenticationPassword }
         : undefined;
+      const activeProjName = projectName.trim() || loadActiveProjectName(workflowId);
       const startedJob = await testCaseApi.startWorkflowCrawlJob(
         workflowId, targetUrl, {
           testing_scope: testingScope,
           authentication,
-          project_name: loadActiveProjectName(workflowId),
+          project_name: activeProjName,
         }
       );
       setCrawlJob(startedJob);
@@ -229,7 +233,7 @@ export function AutomationPage() {
     ) return;
     setBusy(true); setError('');
     try {
-      const activeProjectName = loadActiveProjectName(workflowId);
+      const activeProjectName = projectName.trim() || loadActiveProjectName(workflowId);
       const generated = await testCaseApi.generateScripts(
         workflowId, applicationUrl.trim(), crawl.crawl_id, activeProjectName,
       );
@@ -289,7 +293,7 @@ export function AutomationPage() {
             throw new Error('At least one successfully crawled page is required before regenerating scripts.');
           }
           const refreshed = await testCaseApi.generateScripts(
-            workflowId, applicationUrl.trim(), crawl.crawl_id, loadActiveProjectName(),
+            workflowId, applicationUrl.trim(), crawl.crawl_id, projectName.trim() || loadActiveProjectName(workflowId),
           );
           setGeneration(refreshed);
           setSelectedScript(0);
@@ -380,6 +384,28 @@ export function AutomationPage() {
 
       {!historyMode && (
         <section className="rounded-2xl border border-border bg-card p-5 space-y-5">
+
+          {/* Project Name */}
+          <div>
+            <label htmlFor="project-name" className="text-sm font-semibold">Project Name</label>
+            <div className="mt-2">
+              <input
+                id="project-name"
+                type="text"
+                value={projectName}
+                onChange={(event) => {
+                  const val = event.target.value;
+                  setProjectName(val);
+                  if (typeof window !== 'undefined') {
+                    window.localStorage.setItem('activeProjectName', val);
+                    window.sessionStorage.setItem('activeProjectName', val);
+                  }
+                }}
+                placeholder="e.g. Swag Labs E2E Test Suite"
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+              />
+            </div>
+          </div>
 
           {/* Application URL + action buttons */}
           <div>
