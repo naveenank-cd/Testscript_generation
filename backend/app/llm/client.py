@@ -659,7 +659,7 @@ def build_llm_client(task: str = "generation", *, mock_mode: bool | None = None)
         provider_retry_count=settings.llm_provider_retry_count,
         rate_limit_backoff_seconds=settings.llm_rate_limit_backoff_seconds,
         rate_limit_jitter_seconds=settings.llm_rate_limit_jitter_seconds,
-        rate_limit_fallback_threshold_seconds=settings.llm_rate_limit_fallback_threshold_seconds,
+        rate_limit_fallback_threshold_seconds=getattr(settings, "llm_rate_limit_fallback_threshold_seconds", 10.0),
         provider_concurrency=provider_concurrency,
         provider_min_request_interval=provider_min_request_interval,
         cerebras_provider_retry_count=settings.cerebras_provider_retry_count,

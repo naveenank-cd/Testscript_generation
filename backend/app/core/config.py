@@ -100,6 +100,7 @@ class Settings(BaseSettings):
     llm_provider_retry_count: int = 3
     llm_rate_limit_backoff_seconds: float = 2.0
     llm_rate_limit_jitter_seconds: float = 0.25
+    llm_rate_limit_fallback_threshold_seconds: float = 10.0
     image_upload_enabled: bool = True
     image_max_size_mb: int = 10
     image_max_width: int = 4096
