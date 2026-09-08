@@ -38,5 +38,5 @@ def default_credentials():
     import os
     return {
         "username": os.getenv("TEST_USERNAME", "standard_user"),
-        "password": os.getenv("TEST_PASSWORD", "secret_sauce"),
+        "password": os.getenv("TEST_PASSWORD", ""),
     }

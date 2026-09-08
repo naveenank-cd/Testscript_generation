@@ -335,10 +335,17 @@ class TestDataEngine:
                 ident_val = None
                 pass_val = None
                 if credentials:
-                    if hasattr(credentials, "get_identifier") and credentials.get_identifier:
-                        ident_val = credentials.get_identifier
+                    if hasattr(credentials, "get_identifier"):
+                        ident_val = credentials.get_identifier() if callable(credentials.get_identifier) else credentials.get_identifier
+                    elif hasattr(credentials, "identifier") and credentials.identifier:
+                        ident_val = credentials.identifier
+                    elif hasattr(credentials, "email") and credentials.email:
+                        ident_val = credentials.email
+                    elif hasattr(credentials, "username") and credentials.username:
+                        ident_val = credentials.username
                     elif isinstance(credentials, dict):
                         ident_val = credentials.get("identifier") or credentials.get("email") or credentials.get("username")
+
                     if hasattr(credentials, "password") and credentials.password:
                         pass_val = credentials.password.get_secret_value() if hasattr(credentials.password, "get_secret_value") else str(credentials.password)
                     elif isinstance(credentials, dict):
@@ -346,12 +353,17 @@ class TestDataEngine:
                         pass_val = p.get_secret_value() if hasattr(p, "get_secret_value") else (str(p) if p else None)
 
                 is_password_field = "password" in field_key.lower() or "password" in (best_element.get("input_type") or "").lower()
-                
+                tc_title_lower = str(test_case.get("title") or "").lower()
+                is_negative_tc = any(token in tc_title_lower for token in ("invalid", "wrong", "incorrect", "fail", "error", "unauthorized", "bad", "blank", "empty"))
+
                 if is_password_field:
-                    if pass_val:
+                    if is_negative_tc:
+                        value = "WrongPassword!999"
+                        status = "generated"
+                    elif pass_val:
                         value = pass_val
                     else:
-                        is_login_tc = any(token in test_case.get("title", "").lower() for token in ("login", "signin", "sign-in", "log-in"))
+                        is_login_tc = any(token in tc_title_lower for token in ("login", "signin", "sign-in", "log-in"))
                         if is_login_tc:
                             blocked_reason = "Authentication credentials are required but were not provided."
                             return {}, blocked_reason
@@ -359,7 +371,10 @@ class TestDataEngine:
                             value = "Password123!"
                             status = "generated"
                 else:
-                    if ident_val:
+                    if is_negative_tc and ("user" in tc_title_lower or "email" in tc_title_lower or "account" in tc_title_lower or "unregistered" in tc_title_lower or "nonexistent" in tc_title_lower):
+                        value = "nonexistent.user.test@example.com"
+                        status = "generated"
+                    elif ident_val:
                         value = ident_val
                     else:
                         value = "test.user@example.com"

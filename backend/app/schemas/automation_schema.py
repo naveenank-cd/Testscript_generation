@@ -12,6 +12,7 @@ class GenerateScriptsRequest(BaseModel):
     application_url: HttpUrl
     crawl_id: str
     project_name: str | None = None
+    authentication: PlaywrightAuthentication | None = None
 
 
 class CrawlApplicationRequest(BaseModel):

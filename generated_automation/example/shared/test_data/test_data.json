@@ -2,7 +2,15 @@
   "credentials": {
     "default": {
       "username": "standard_user",
-      "password": "secret_sauce"
+      "password": ""
+    },
+    "invalid_password": {
+      "username": "standard_user",
+      "password": "WrongPassword!999"
+    },
+    "invalid_user": {
+      "username": "nonexistent.user.test@example.com",
+      "password": "WrongPassword!999"
     }
   },
   "environment": {

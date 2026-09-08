@@ -923,3 +923,46 @@ async def test_capture_interactive_elements_generic_and_form_aware():
     assert input_el["required"] is True
     assert input_el["form_info"]["form_id"] == "login-form"
     assert input_el["form_info"]["form_action"] == "/api/login"
+
+
+def test_locator_phrase_normalization_and_compound_actions():
+    # Non-breaking hyphens (\u2011) and compound clauses
+    phrase1 = AutomationService._locator_phrase("Select the auto\u2011renewed appointment and view its details")
+    assert "auto" in phrase1.lower()
+    assert "renew" in phrase1.lower()
+    assert "and its details" not in phrase1.lower()
+
+    # Quoted action buttons
+    phrase2 = AutomationService._locator_phrase('Click "Auto\u2011Renew" button for the appointment.')
+    assert "auto" in phrase2.lower()
+    assert "renew" in phrase2.lower()
+
+    phrase3 = AutomationService._locator_phrase('Click "Auto\u2011Renew" button for appointment "B1".')
+    assert "auto" in phrase3.lower()
+    assert "renew" in phrase3.lower()
+
+
+def test_context_element_page_preservation():
+    elements = [
+        {
+            "visible_text": "Export Participant Details",
+            "name": "Export Details",
+            "role": "button",
+            "page_url": "https://qa-caregiver-adminpanel.cdians.com/participants",
+        },
+        {
+            "visible_text": "Participants Twenty-One, Recurring Auto Renew series",
+            "name": "Recurring Auto Renew series",
+            "role": "row",
+            "page_url": "https://qa-caregiver-adminpanel.cdians.com/appointments",
+        },
+    ]
+    # When testing appointments page, it should pick the element on appointments, NOT participants
+    matched = AutomationService._context_element(
+        "Select the auto-renewed appointment and view its details",
+        elements,
+        current_url="https://qa-caregiver-adminpanel.cdians.com/appointments",
+    )
+    assert matched is not None
+    assert matched["page_url"] == "https://qa-caregiver-adminpanel.cdians.com/appointments"
+

@@ -271,7 +271,7 @@ export function AutomationPage() {
       return;
     }
     const authentication = authenticationEmail.trim() && authenticationPassword
-      ? { email: authenticationEmail.trim(), password: authenticationPassword }
+      ? { identifier: authenticationEmail.trim(), email: authenticationEmail.trim(), password: authenticationPassword }
       : undefined;
     setBusy(true); setError(''); setShowTestReport(false); setShowDeveloperReport(false);
     try {

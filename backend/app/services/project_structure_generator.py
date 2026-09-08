@@ -246,7 +246,23 @@ def assert_element_text(locator: Locator, expected_text: str, timeout: int = 100
         )
 
         # Conftest (Pytest Fixtures)
-        ident = credentials.get("identifier") or credentials.get("username") or "standard_user" if credentials else "standard_user"
+        ident = "standard_user"
+        pwd = "secret_sauce"
+        if credentials:
+            if hasattr(credentials, "get_identifier") and credentials.get_identifier:
+                ident = credentials.get_identifier
+            elif isinstance(credentials, dict):
+                ident = credentials.get("identifier") or credentials.get("email") or credentials.get("username") or "standard_user"
+            elif hasattr(credentials, "identifier") or hasattr(credentials, "email"):
+                ident = getattr(credentials, "identifier", None) or getattr(credentials, "email", None) or "standard_user"
+
+            if hasattr(credentials, "password") and credentials.password:
+                pwd = credentials.password.get_secret_value() if hasattr(credentials.password, "get_secret_value") else str(credentials.password)
+            elif isinstance(credentials, dict):
+                p = credentials.get("password")
+                if p:
+                    pwd = p.get_secret_value() if hasattr(p, "get_secret_value") else str(p)
+
         conftest_code = f'''"""Pytest global fixtures for Playwright browser and page management."""
 import pytest
 from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
@@ -287,7 +303,7 @@ def default_credentials():
     import os
     return {{
         "username": os.getenv("TEST_USERNAME", "{ident}"),
-        "password": os.getenv("TEST_PASSWORD", "secret_sauce"),
+        "password": os.getenv("TEST_PASSWORD", ""),
     }}
 '''
         project.files.append(
@@ -297,27 +313,41 @@ def default_credentials():
         # Data Loader
         data_loader_code = '''"""Test data loader utility."""
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict
 
 def load_test_data(filename: str = "test_data.json") -> Dict[str, Any]:
-    """Load JSON test data from shared/test_data directory."""
+    """Load JSON test data from shared/test_data directory with runtime env secret resolution."""
     data_path = Path(__file__).resolve().parent / filename
+    data = {}
     if data_path.is_file():
-        return json.loads(data_path.read_text(encoding="utf-8"))
-    return {}
+        data = json.loads(data_path.read_text(encoding="utf-8"))
+    if "credentials" in data and "default" in data["credentials"]:
+        env_pwd = os.getenv("TEST_PASSWORD")
+        if env_pwd:
+            data["credentials"]["default"]["password"] = env_pwd
+    return data
 '''
         project.files.append(
             GeneratedFile(relative_path="shared/test_data/data_loader.py", content=data_loader_code)
         )
 
-        # Default Test Data
+        # Default Test Data (including negative testing variants)
         default_data = {
             "credentials": {
                 "default": {
                     "username": ident,
-                    "password": "secret_sauce",
-                }
+                    "password": "",
+                },
+                "invalid_password": {
+                    "username": ident,
+                    "password": "WrongPassword!999",
+                },
+                "invalid_user": {
+                    "username": "nonexistent.user.test@example.com",
+                    "password": "WrongPassword!999",
+                },
             },
             "environment": {
                 "base_url": base_url,
@@ -539,8 +569,20 @@ def {safe_func_name}(page: Page, default_credentials: dict) -> None:
             if not any(f.relative_path == p for f in project.files):
                 project.files.append(GeneratedFile(relative_path=p, content='"""Package marker."""\n'))
 
-    def _add_root_config_files(self, project: ModularProject, base_url: str, credentials: Optional[Dict[str, Any]] = None) -> None:
-        ident = credentials.get("identifier") or credentials.get("username") or "standard_user" if credentials else "standard_user"
+    def _add_root_config_files(self, project: ModularProject, base_url: str, credentials: Optional[Any] = None) -> None:
+        ident = "standard_user"
+        if credentials:
+            if hasattr(credentials, "get_identifier"):
+                ident = credentials.get_identifier() if callable(credentials.get_identifier) else credentials.get_identifier
+            elif hasattr(credentials, "identifier") and credentials.identifier:
+                ident = credentials.identifier
+            elif hasattr(credentials, "email") and credentials.email:
+                ident = credentials.email
+            elif hasattr(credentials, "username") and credentials.username:
+                ident = credentials.username
+            elif isinstance(credentials, dict):
+                ident = credentials.get("identifier") or credentials.get("email") or credentials.get("username") or "standard_user"
+        ident = str(ident or "standard_user")
 
         requirements_txt = """playwright>=1.40.0
 pytest>=8.0.0

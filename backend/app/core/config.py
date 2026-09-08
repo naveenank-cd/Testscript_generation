@@ -206,6 +206,21 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in raw_value.split(",") if origin.strip()]
         return value
 
+    @field_validator("automation_artifacts_path", mode="before")
+    @classmethod
+    def normalize_artifacts_path(cls, value: object) -> str:
+        """Ensure automation artifacts are always stored outside backend/ to prevent Uvicorn reload loops."""
+        workspace_root = Path(__file__).resolve().parents[3]
+        if not value:
+            return str(workspace_root / "artifacts" / "automation")
+        p = Path(str(value))
+        if not p.is_absolute():
+            clean = str(value).replace("\\", "/").strip("./").strip("/")
+            if clean.startswith("artifacts"):
+                return str(workspace_root / clean)
+            return str((workspace_root / str(value)).resolve())
+        return str(p.resolve())
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
