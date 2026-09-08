@@ -1652,10 +1652,26 @@ class AutomationService:
                     locale="en-US",
                     viewport={"width": 1440, "height": 900},
                 )
+                try:
+                    context.on("dialog", lambda dialog: asyncio.create_task(dialog.dismiss()))
+                    if hasattr(context, "set_default_navigation_timeout"):
+                        context.set_default_navigation_timeout(
+                            int(settings.automation_navigation_timeout_seconds * 1000)
+                        )
+                    if hasattr(context, "set_default_timeout"):
+                        context.set_default_timeout(
+                            int(settings.automation_action_timeout_seconds * 1000)
+                        )
+                except Exception:
+                    pass
                 await context.add_init_script(
                     "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
                 )
                 page = await context.new_page()
+                try:
+                    page.on("dialog", lambda dialog: asyncio.create_task(dialog.dismiss()))
+                except Exception:
+                    pass
                 page.on(
                     "console",
                     lambda message: report["console_errors"].append(message.text)
@@ -1781,61 +1797,71 @@ class AutomationService:
                     if cancel_event is not None and cancel_event.is_set():
                         return {"success": False, "error": "cancelled"}
                     worker_page = await context.new_page()
-                    last_error: Exception | None = None
                     try:
-                        for attempt in range(
-                            settings.automation_navigation_retry_limit + 1
-                        ):
+                        worker_page.on("dialog", lambda dialog: asyncio.create_task(dialog.dismiss()))
+                    except Exception:
+                        pass
+                    try:
+                        # Fast probe navigation without multiplied 3x retries
+                        await worker_page.goto(
+                            source_url,
+                            wait_until="domcontentloaded",
+                            timeout=min(10000, int(settings.automation_navigation_timeout_seconds * 1000)),
+                        )
+                        await self._crawl_wait(worker_page)
+                        if cancel_event is not None and cancel_event.is_set():
+                            return {"success": False, "error": "cancelled"}
+                        before = _canonical_page_url(worker_page.url)
+                        candidates = self._alternate_locators(
+                            worker_page, control
+                        )
+                        if not candidates:
+                            return {"success": False, "error": "no candidate locators"}
+                        clicked = False
+                        for locator_candidate in candidates[:2]:
                             if cancel_event is not None and cancel_event.is_set():
                                 return {"success": False, "error": "cancelled"}
+                            locator = locator_candidate.first
                             try:
-                                await self._navigate_with_retries(
-                                    worker_page, source_url
-                                )
-                                before = _canonical_page_url(worker_page.url)
-                                candidates = self._alternate_locators(
-                                    worker_page, control
-                                )
-                                if not candidates:
-                                    break
-                                locator = candidates[
-                                    min(attempt, len(candidates) - 1)
-                                ].first
-                                if not await locator.is_visible():
-                                    continue
-                                await locator.click(
-                                    timeout=min(2000, int(
-                                        settings.automation_action_timeout_seconds
-                                        * 1000
-                                    ))
-                                )
-                                try:
-                                    await worker_page.wait_for_url(
-                                        lambda value: _canonical_page_url(str(value))
-                                        != before,
-                                        timeout=min(2000, int(
-                                            settings.automation_navigation_settle_timeout_seconds
+                                if await locator.is_visible():
+                                    await locator.click(
+                                        timeout=min(1500, int(
+                                            settings.automation_action_timeout_seconds
                                             * 1000
-                                        )),
+                                        ))
                                     )
-                                except Exception:
-                                    pass
-                                await self._crawl_wait(worker_page)
-                                after = _canonical_page_url(worker_page.url)
-                                refreshed = await self._capture_interactive_elements(
-                                    worker_page
-                                )
-                                return {
-                                    "success": True,
-                                    "before": before,
-                                    "after": after,
-                                    "elements": refreshed,
-                                }
-                            except Exception as exc:
-                                last_error = exc
+                                    clicked = True
+                                    break
+                            except Exception:
+                                continue
+                        if not clicked:
+                            return {"success": False, "error": "no visible clickable locator"}
+                        try:
+                            await worker_page.wait_for_url(
+                                lambda value: _canonical_page_url(str(value))
+                                != before,
+                                timeout=min(1500, int(
+                                    settings.automation_navigation_settle_timeout_seconds
+                                    * 1000
+                                )),
+                            )
+                        except Exception:
+                            pass
+                        await self._crawl_wait(worker_page)
+                        after = _canonical_page_url(worker_page.url)
+                        refreshed = await self._capture_interactive_elements(
+                            worker_page
+                        )
+                        return {
+                            "success": True,
+                            "before": before,
+                            "after": after,
+                            "elements": refreshed,
+                        }
+                    except Exception as exc:
                         return {
                             "success": False,
-                            "error": str(last_error or "no visible alternate locator"),
+                            "error": str(exc),
                         }
                     finally:
                         try:
@@ -2066,6 +2092,8 @@ class AutomationService:
                     except Exception:
                         logger.debug("Lazy-content scrolling failed url=%s", current_url)
                     expanded_selectors: list[str] = []
+                    expansion_count = 0
+                    max_expansions_per_page = 10
                     for selector in (
                         "[aria-expanded='false']",
                         "[aria-haspopup='menu']",
@@ -2079,12 +2107,21 @@ class AutomationService:
                         "details:not([open]) > summary",
                         "[role='tab'][aria-selected='false']",
                     ):
-                        for expandable in (await page.locator(selector).all())[:30]:
+                        if expansion_count >= max_expansions_per_page or (cancel_event is not None and cancel_event.is_set()):
+                            break
+                        try:
+                            expandables = (await page.locator(selector).all())[:3]
+                        except Exception:
+                            continue
+                        for expandable in expandables:
+                            if expansion_count >= max_expansions_per_page or (cancel_event is not None and cancel_event.is_set()):
+                                break
                             try:
                                 if await expandable.is_visible():
                                     await expandable.click(
-                                        timeout=int(settings.automation_action_timeout_seconds * 1000)
+                                        timeout=min(1500, int(settings.automation_action_timeout_seconds * 1000))
                                     )
+                                    expansion_count += 1
                                     stable_expander = await expandable.evaluate(
                                         """el => {
                                           const q = value => JSON.stringify(value);
@@ -2296,11 +2333,18 @@ class AutomationService:
                                 item for item in discovered
                                 if item.get("navigation_candidate") and not item.get("href")
                                 and item.get("css_selector")
-                            ][:settings.automation_navigation_controls_per_page]
+                            ][:min(settings.automation_navigation_controls_per_page, 20)]
                             crawl_concurrency = max(
                                 1, settings.automation_crawl_concurrency
                             )
+                            page_exploration_deadline = time.monotonic() + 25.0
                             for offset in range(0, len(controls), crawl_concurrency):
+                                if (
+                                    (cancel_event is not None and cancel_event.is_set())
+                                    or time.monotonic() >= page_exploration_deadline
+                                    or time.monotonic() >= deadline
+                                ):
+                                    break
                                 control_batch = controls[
                                     offset : offset + crawl_concurrency
                                 ]
@@ -2315,10 +2359,7 @@ class AutomationService:
                                         report["unprocessed_navigation_states"].append({
                                             "page_url": current_url,
                                             "control": control.get("name") or control.get("css_selector"),
-                                            "reason": (
-                                                "safe_navigation_exploration_failed_after_"
-                                                f"{settings.automation_navigation_retry_limit + 1}_attempts"
-                                            ),
+                                            "reason": "safe_navigation_exploration_failed",
                                             "error": result.get("error"),
                                         })
                                         continue
