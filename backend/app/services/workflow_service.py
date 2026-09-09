@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import asyncio,json,uuid
+from typing import Any
 from datetime import datetime,timezone
 from pathlib import Path
 from app.core.config import settings
@@ -35,13 +38,28 @@ class WorkflowService:
         if state.get("project_id"):state["project_id"]=uuid.UUID(str(state["project_id"]))
         return state
     async def start(self,request):
-        project_id=request.project_id or uuid.uuid4()
+        project_id=request.project_id
+        project_name=getattr(request,"project_name",None)
+        crawl_knowledge=None
+        try:
+            from app.database.session import AsyncSessionLocal
+            from app.services.project_service import ProjectService
+            async with AsyncSessionLocal() as session:
+                project_svc=ProjectService(session)
+                project=await project_svc.get_or_create_project(project_id=project_id,project_name=project_name)
+                project_id=project.id
+                project_name=project.name
+                crawl_knowledge=project.crawl_knowledge
+        except Exception:
+            if not project_id: project_id=uuid.uuid4()
         if request.document_session_id:
             payload=(await document_service.get(request.document_session_id))["input_payload"]
         else:
             payload=(request.input_payload.model_dump() if request.input_payload else await DatabaseInputSource().load(project_id))
         cache_key=cache.fingerprint("workflow",{"input":payload,"mock_mode":request.mock_mode,"confidence_threshold":request.confidence_threshold,"models":{"generation":settings.groq_generation_model or settings.groq_model,"regeneration":settings.groq_regeneration_model or settings.groq_model}})
         workflow_id=uuid.uuid4(); state=initial_state(workflow_id,project_id,request.source_type.value,payload,request.mock_mode,request.confidence_threshold);state["cache_key"]=cache_key;state["cache_hit"]=False
+        if project_name: state["project_name"]=project_name
+        if crawl_knowledge: state["crawl_knowledge"]=crawl_knowledge
         cached=await cache.get_json(cache_key)
         if cached:
             state.update({key:cached.get(key,value) for key,value in {"structured_context":{},"scenarios":[],"scenario_validation":{},"test_cases":[],"testcase_validation":{}}.items()})
@@ -153,4 +171,27 @@ class WorkflowService:
         self._persist_state(state)
         await self._cache_completed(state)
         return tc
+
+    def get_workflows_for_project(self, project_id: uuid.UUID | str) -> list[dict[str, Any]]:
+        target_pid = str(project_id)
+        results: list[dict[str, Any]] = []
+        workflows_dir = Path(settings.automation_artifacts_path) / "workflows"
+        if not workflows_dir.is_dir():
+            return results
+        for p in workflows_dir.glob("*.json"):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                if str(data.get("project_id", "")) == target_pid:
+                    results.append(data)
+            except Exception:
+                continue
+        # Also check in-memory states that might not be on disk yet
+        for wid, state in self._states.items():
+            if str(state.get("project_id", "")) == target_pid:
+                if not any(str(r.get("workflow_id")) == str(wid) for r in results):
+                    results.append(state)
+        # Sort newest first
+        results.sort(key=lambda x: str(x.get("started_at") or x.get("completed_at") or ""), reverse=True)
+        return results
+
 workflow_service=WorkflowService()

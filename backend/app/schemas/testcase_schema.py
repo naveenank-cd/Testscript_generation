@@ -3,11 +3,20 @@ from enum import Enum
 from typing import Any
 from pydantic import BaseModel,ConfigDict,Field,field_validator,model_validator
 from app.schemas.common import Priority
-class TestStep(BaseModel): step_number:int=Field(ge=1); action:str=Field(min_length=1); expected_result:str=Field(min_length=1)
+class TestStep(BaseModel):
+    step_number:int=Field(ge=1); action:str=Field(min_length=1); expected_result:str=Field(min_length=1)
+    evidence_status:str="verified"
+    target_page:str|None=None
+    target_element:str|None=None
+    target_locator:str|None=None
+
 class TestCase(BaseModel):
     model_config=ConfigDict(extra="ignore")
     test_case_id:uuid.UUID=Field(default_factory=uuid.uuid4); scenario_id:uuid.UUID=Field(default_factory=uuid.uuid4); project_id:uuid.UUID=Field(default_factory=uuid.uuid4); title:str=Field(min_length=1); description:str=Field(min_length=1); test_case_type:str=Field(default="functional"); priority:Priority=Priority.medium; functional_area:str=Field(default="Unclassified"); in_critical_suite:bool=Field(default=False)
-    preconditions:list[str]=Field(default_factory=list); test_data:dict[str,Any]=Field(default_factory=dict); steps:list[TestStep]=Field(min_length=1); postconditions:list[str]=Field(default_factory=list); requirement_ids:list[str]=Field(default_factory=list); acceptance_criteria_ids:list[str]=Field(default_factory=list); source_references:list[str]=Field(default_factory=list); automation_candidate:bool=False; generation_metadata:dict[str,Any]=Field(default_factory=dict)
+    preconditions:list[str]=Field(default_factory=list); test_data:dict[str,Any]=Field(default_factory=dict); steps:list[TestStep]=Field(min_length=1); postconditions:list[str]=Field(default_factory=list); requirement_ids:list[str]=Field(default_factory=list); acceptance_criteria_ids:list[str]=Field(default_factory=list); source_references:list[str]=Field(default_factory=list); automation_candidate:bool=False
+    evidence_status:str="verified"
+    ui_mapping:list[dict[str,Any]]=Field(default_factory=list)
+    generation_metadata:dict[str,Any]=Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -92,6 +101,13 @@ class TestCase(BaseModel):
                     s_dict["action"] = "Execute test step"
                 if not str(s_dict.get("expected_result") or "").strip():
                     s_dict["expected_result"] = "Step completes successfully"
+                normalized_steps.append(s_dict)
+            elif isinstance(step, TestStep):
+                step.step_number = index
+                normalized_steps.append(step)
+            elif hasattr(step, "model_dump"):
+                s_dict = step.model_dump()
+                s_dict["step_number"] = index
                 normalized_steps.append(s_dict)
             else:
                 normalized_steps.append({

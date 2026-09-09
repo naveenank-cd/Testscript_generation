@@ -35,6 +35,8 @@ export interface ManualInputPayload {
 
 export interface WorkflowStartRequest {
   source_type: 'manual';
+  project_id?: string;
+  project_name?: string;
   input_payload?: ManualInputPayload;
   document_session_id?: string;
   mock_mode?: boolean;
@@ -289,6 +291,8 @@ export interface CrawlAnalysis {
   crawl_report: CrawlReport;
   application_map: ScriptGeneration['application_map'];
   discovered_elements: ScriptGeneration['discovered_elements'];
+  project_id?: string;
+  project_name?: string;
 }
 
 export interface WorkflowCrawlJob {
@@ -702,6 +706,8 @@ export interface CrawlGenerationResponse {
   scripts: GeneratedScript[];
   discovered_elements: DiscoveredElement[];
   application_map: Record<string, unknown>;
+  project_id?: string;
+  project_name?: string;
 }
 
 export interface CrawlJob {

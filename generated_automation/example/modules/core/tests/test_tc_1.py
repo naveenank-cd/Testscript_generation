@@ -11,8 +11,6 @@ def test_login(page: Page, default_credentials: dict) -> None:
     """Login."""
     home_page = HomePage(page)
 
-    # Step 1: Navigate to base application
+    # Step 1: Navigate to application
     home_page.navigate()
     home_page.assert_loaded()
-
-    # Step 1: Open

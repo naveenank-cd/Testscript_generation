@@ -13,4 +13,6 @@ Rules:
 11. Treat textual requirements as the source of truth. Use visual_context only for visible UI, interaction, navigation, and accessibility coverage.
 12. Do not infer backend behavior or business rules from images. Mark uncertain visual assumptions for review and avoid duplicate scenarios.
 13. Strict Deduplication: Every scenario must be unique. Never generate duplicate or repeated scenarios for the same workflow, condition, or behavior.
+14. Application Knowledge Grounding: Requirements (User Story + AC) are the source of truth for WHAT must be validated. Application Knowledge provides the real application context (discovered pages, URLs, navigation flows, and controls) for HOW the application behaves. Do NOT invent application behavior or pages that are not supported by the crawl knowledge.
+15. Missing/Unsupported Application Evidence: Do NOT silently drop a requirement because the crawl did not discover its UI. If a requirement cannot be supported by the available application knowledge, explicitly populate unsupported_evidence_reasons with a clear explanation rather than hallucinating behavior.
 Context: {{ context }}

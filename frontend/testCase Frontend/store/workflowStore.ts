@@ -13,6 +13,7 @@ interface WorkflowStore {
   result: WorkflowResult | null;
   projects: TestProjectRecord[];
   setWorkflow: (workflowId: string, projectId?: string | null, projectName?: string) => void;
+  setProjectId: (projectId: string | null) => void;
   setSnapshot: (snapshot: WorkflowEvent) => void;
   setResult: (result: WorkflowResult | null) => void;
   deleteProject: (workflowId: string) => void;
@@ -132,6 +133,14 @@ export const useTestCaseWorkflowStore = create<WorkflowStore>((set) => ({
       }
     }
     set({ workflowId, projectId, projects });
+  },
+  setProjectId: (projectId: string | null) => {
+    try {
+      const active = JSON.parse(sessionStorage.getItem(WORKFLOW_STORAGE_KEY) ?? '{}');
+      sessionStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify({ ...active, projectId }));
+    } catch {}
+    if (projectId) setActiveProjectId(projectId);
+    set({ projectId });
   },
   setSnapshot: (snapshot) => {
     sessionStorage.setItem(WORKFLOW_SNAPSHOT_KEY, JSON.stringify(snapshot));

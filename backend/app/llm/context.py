@@ -88,6 +88,7 @@ def scoped_context(context: dict[str, Any], selected: list[Any]) -> dict[str, An
         "tech_stack": _clean(context.get("tech_stack", {})),
         "image_ids": _clean(context.get("image_ids", [])),
         "visual_context": _clean(context.get("visual_context", [])),
+        "application_knowledge": _clean(context.get("application_knowledge")),
     }
     related_stories = []
     for story in context.get("user_stories", []):

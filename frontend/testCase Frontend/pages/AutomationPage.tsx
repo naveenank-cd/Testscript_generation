@@ -13,7 +13,7 @@ import { downloadFile, friendlyError, friendlyId, loadActiveProjectName, registe
 
 export function AutomationPage() {
   const historyMode = useSearchParams().get('view') === 'history';
-  const { workflowId, hydrate } = useTestCaseWorkflowStore();
+  const { workflowId, projectId, setProjectId, hydrate } = useTestCaseWorkflowStore();
   const [projectName, setProjectName] = useState(() => (typeof window !== 'undefined' ? (loadActiveProjectName(workflowId || undefined) || '') : ''));
   const [applicationUrl, setApplicationUrl] = useState('');
   const [authenticationEmail, setAuthenticationEmail] = useState('');
@@ -131,7 +131,10 @@ export function AutomationPage() {
         }
         setCrawlJob(current);
         if (current.status === 'completed' || current.status === 'stopped') {
-          if (current.crawl) setCrawl(current.crawl);
+          if (current.crawl) {
+            setCrawl(current.crawl);
+            if (current.crawl.project_id) setProjectId(current.crawl.project_id);
+          }
           if (current.generation) {
             setGeneration(current.generation);
             setSelectedScript(0);
@@ -216,6 +219,7 @@ export function AutomationPage() {
           testing_scope: testingScope,
           authentication,
           project_name: activeProjName,
+          project_id: projectId || undefined,
         }
       );
       setCrawlJob(startedJob);
@@ -375,9 +379,22 @@ export function AutomationPage() {
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Playwright automation</p>
-        <h1 className="mt-2 text-2xl font-bold">{historyMode ? 'Saved scripts and execution results' : 'Generate and execute test scripts'}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">{historyMode ? 'Read-only output from the previously completed run. This view cannot start a crawl or execution.' : 'Playwright remains the primary engine. Optional Seacrawl recovery is limited to failed locator actions.'}</p>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Playwright automation</p>
+            <h1 className="mt-1 text-2xl font-bold">{historyMode ? 'Saved scripts and execution results' : 'Generate and execute test scripts'}</h1>
+            <p className="mt-1 text-sm text-muted-foreground">{historyMode ? 'Read-only output from the previously completed run. This view cannot start a crawl or execution.' : 'Playwright remains the primary engine. Optional Seacrawl recovery is limited to failed locator actions.'}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              window.location.href = '/test-case-generation/input';
+            }}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground shadow transition hover:bg-primary/90 self-start sm:self-auto"
+          >
+            + Add Another Generation
+          </button>
+        </div>
       </div>
 
       {error && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-600">{error}</div>}
@@ -422,10 +439,11 @@ export function AutomationPage() {
               <button
                 disabled={busy || (!crawlRunning && !applicationUrl.trim())}
                 onClick={crawlApplication}
-                className={`inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${crawlRunning ? 'bg-red-600 hover:bg-red-700' : 'bg-primary text-primary-foreground'}`}
+                className={`inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${crawlRunning ? 'bg-red-600 hover:bg-red-700' : crawl ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-primary text-primary-foreground'}`}
+                title={crawl ? 'Perform a new crawl without overwriting existing generation outputs' : 'Crawl application to discover pages and locators'}
               >
                 {busy || crawlJob?.status === 'stopping' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                {crawlRunning ? 'Stop Crawling' : 'Crawl Application'}
+                {crawlRunning ? 'Stop Crawling' : crawl ? 'Re-Crawl Application' : 'Crawl Application'}
               </button>
               <button
                 disabled={busy || !hasUsableCrawl}
@@ -435,6 +453,11 @@ export function AutomationPage() {
                 <Play className="h-4 w-4" /> Generate Test Scripts
               </button>
             </div>
+            {crawl && !crawlRunning && (
+              <p className="mt-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-medium">
+                Active Saved Crawl: {crawl.pages_crawled} pages · {crawl.discovered_elements?.length ?? 0} elements. Script generation reuses this crawl by default. Re-crawling will preserve all existing generation outputs.
+              </p>
+            )}
           </div>
 
           {/* Testing Scope */}

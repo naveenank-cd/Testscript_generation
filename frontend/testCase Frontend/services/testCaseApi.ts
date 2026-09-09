@@ -136,6 +136,7 @@ export const testCaseApi = {
     testing_scope?: 'full_application' | 'specific_page';
     authentication?: any;
     project_name?: string;
+    project_id?: string;
   }) {
     return request<WorkflowCrawlJob>('/api/v1/automation/scripts/crawl/jobs', {
       method: 'POST',
@@ -164,6 +165,8 @@ export const testCaseApi = {
     max_execution_time_seconds?: number;
     testing_scope?: 'full_application' | 'specific_page';
     authentication?: any;
+    project_id?: string;
+    project_name?: string;
   }) {
     return request<CrawlJob>('/api/v1/automation/url-crawl/jobs', {
       method: 'POST',
@@ -179,6 +182,10 @@ export const testCaseApi = {
     return request<CrawlJob>(`/api/v1/automation/url-crawl/jobs/${jobId}/stop`, {
       method: 'POST',
     });
+  },
+
+  getProjectCrawlKnowledge(projectId: string) {
+    return request<Record<string, unknown>>(`/api/v1/projects/${projectId}/crawl-knowledge`);
   },
   startHumanExecution(payload: {
     workflow_id: string;
@@ -288,6 +295,10 @@ export const testCaseApi = {
     return request<WorkflowEvent>(`/api/v1/workflows/${workflowId}/review/approve`, {
       method: 'POST', body: JSON.stringify({ stage }),
     });
+  },
+
+  getProjectGenerations(projectId: string) {
+    return request<any[]>(`/api/v1/projects/${projectId}/generations`);
   },
 
   connectToWorkflowEvents(

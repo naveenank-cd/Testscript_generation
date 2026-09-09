@@ -5,9 +5,10 @@ from app.agents.scenario_generation_agent import ScenarioGenerationAgent
 from app.agents.scenario_validation_agent import ScenarioValidationAgent
 from app.agents.testcase_generation_agent import TestCaseGenerationAgent
 from app.agents.testcase_validation_agent import TestCaseValidationAgent
+from app.services.application_knowledge_service import map_test_case_steps_to_crawl_evidence
 def _ctx(s): return ExecutionContext(request_id=str(s["workflow_id"]),workflow_id=str(s["workflow_id"]),metadata={"mock_mode":s.get("mock_mode",False)})
 async def load_input_node(s): s["current_stage"]="load_input"; return s
-async def prepare_context_node(s): s["status"]=s["current_stage"]="preparing_context"; s["structured_context"]=(await ContextPreparationAgent().execute({"project_id":s["project_id"],"source_type":s["source_type"],"input_payload":s["input_payload"]},_ctx(s))).model_dump(mode="json"); return s
+async def prepare_context_node(s): s["status"]=s["current_stage"]="preparing_context"; s["structured_context"]=(await ContextPreparationAgent().execute({"project_id":s["project_id"],"source_type":s["source_type"],"input_payload":s["input_payload"],"crawl_knowledge":s.get("crawl_knowledge")},_ctx(s))).model_dump(mode="json"); return s
 async def generate_scenarios_node(s): s["status"]=s["current_stage"]="generating_scenarios"; s["scenario_attempt_count"]+=1; s["scenarios"]=(await ScenarioGenerationAgent().execute(s["structured_context"],_ctx(s))).model_dump(mode="json")["scenarios"]; return s
 async def validate_scenarios_node(s): s["status"]=s["current_stage"]="validating_scenarios"; s["scenario_validation"]=(await ScenarioValidationAgent().execute({"context":s["structured_context"],"scenarios":{"scenarios":s["scenarios"]},"confidence_threshold":s.get("confidence_threshold",.95)},_ctx(s))).model_dump(mode="json"); return s
 async def regenerate_scenarios_node(s):
@@ -16,12 +17,21 @@ async def regenerate_scenarios_node(s):
     s["scenarios"]=(await ScenarioGenerationAgent().execute(payload,_ctx(s))).model_dump(mode="json")["scenarios"]
     return s
 async def scenario_manual_review_node(s): s["status"]=s["current_stage"]="scenario_manual_review"; s["manual_intervention_reason"]=f"Scenario confidence remained below {s.get('confidence_threshold',.95)*100:g}% after the configured validation attempts"; return s
-async def generate_test_cases_node(s): s["status"]=s["current_stage"]="generating_test_cases"; s["test_cases"]=(await TestCaseGenerationAgent().execute({"scenarios":s["scenarios"],"context":s["structured_context"]},_ctx(s))).model_dump(mode="json")["test_cases"]; return s
+async def generate_test_cases_node(s):
+    s["status"]=s["current_stage"]="generating_test_cases"
+    s["test_cases"]=(await TestCaseGenerationAgent().execute({"scenarios":s["scenarios"],"context":s["structured_context"]},_ctx(s))).model_dump(mode="json")["test_cases"]
+    app_k = s.get("crawl_knowledge") or s.get("structured_context", {}).get("application_knowledge")
+    if app_k:
+        map_test_case_steps_to_crawl_evidence(s["test_cases"], app_k)
+    return s
 async def validate_test_cases_node(s): s["status"]=s["current_stage"]="validating_test_cases"; s["testcase_attempt_count"]+=1; s["testcase_validation"]=(await TestCaseValidationAgent().execute({"scenarios":{"scenarios":s["scenarios"]},"test_cases":{"test_cases":s["test_cases"]},"confidence_threshold":s.get("confidence_threshold",.95)},_ctx(s))).model_dump(mode="json"); return s
 async def regenerate_test_cases_node(s):
     s["status"]=s["current_stage"]="generating_test_cases"
     payload={"scenarios":s["scenarios"],"context":s["structured_context"],"existing_test_cases":s["test_cases"],"validation":s["testcase_validation"]}
     s["test_cases"]=(await TestCaseGenerationAgent().execute(payload,_ctx(s))).model_dump(mode="json")["test_cases"]
+    app_k = s.get("crawl_knowledge") or s.get("structured_context", {}).get("application_knowledge")
+    if app_k:
+        map_test_case_steps_to_crawl_evidence(s["test_cases"], app_k)
     return s
 async def testcase_manual_review_node(s): s["status"]=s["current_stage"]="testcase_manual_review"; s["manual_intervention_reason"]=f"Test-case confidence remained below {s.get('confidence_threshold',.95)*100:g}% after the configured validation attempts"; return s
 async def persist_results_node(s): s["current_stage"]="persist_results"; return s

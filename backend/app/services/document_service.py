@@ -48,21 +48,26 @@ def extract_text(filename: str, content_type: str, data: bytes) -> str:
         elif extension == ".docx":
             if not data.startswith(b"PK"):
                 raise ValueError("invalid DOCX signature")
+            parsed_via_docx = False
             if Document is not None:
-                document = Document(io.BytesIO(data))
-                lines = []
-                for paragraph in document.paragraphs:
-                    paragraph_text = (paragraph.text or "").strip()
-                    if not paragraph_text:
-                        continue
-                    style_name = (getattr(paragraph.style, "name", "") or "").lower()
-                    if "bullet" in style_name:
-                        paragraph_text = f"• {paragraph_text}"
-                    elif "number" in style_name:
-                        paragraph_text = f"1. {paragraph_text}"
-                    lines.append(paragraph_text)
-                text = "\n".join(lines)
-            else:
+                try:
+                    document = Document(io.BytesIO(data))
+                    lines = []
+                    for paragraph in document.paragraphs:
+                        paragraph_text = (paragraph.text or "").strip()
+                        if not paragraph_text:
+                            continue
+                        style_name = (getattr(paragraph.style, "name", "") or "").lower()
+                        if "bullet" in style_name:
+                            paragraph_text = f"• {paragraph_text}"
+                        elif "number" in style_name:
+                            paragraph_text = f"1. {paragraph_text}"
+                        lines.append(paragraph_text)
+                    text = "\n".join(lines)
+                    parsed_via_docx = True
+                except Exception:
+                    parsed_via_docx = False
+            if not parsed_via_docx:
                 with zipfile.ZipFile(io.BytesIO(data)) as archive:
                     xml = archive.read("word/document.xml")
                 root = ElementTree.fromstring(xml)

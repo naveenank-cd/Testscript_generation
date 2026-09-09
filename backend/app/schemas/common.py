@@ -2,10 +2,38 @@ import uuid
 from enum import Enum
 from datetime import datetime
 from pydantic import BaseModel,ConfigDict,Field,model_validator
+from typing import Any
 class ORMModel(BaseModel): model_config=ConfigDict(from_attributes=True)
-class ProjectCreate(BaseModel): name:str=Field(examples=["Employee Leave Management Testing"]);description:str|None=None;external_project_id:str|None=None;status:str="active"
-class ProjectUpdate(BaseModel): name:str|None=None;description:str|None=None;external_project_id:str|None=None;status:str|None=None
-class ProjectRead(ORMModel): id:uuid.UUID;name:str;description:str|None;external_project_id:str|None;status:str;created_at:datetime;updated_at:datetime
+class ProjectCreate(BaseModel):
+    name: str = Field(examples=["Employee Leave Management Testing"])
+    description: str | None = None
+    external_project_id: str | None = None
+    status: str = "active"
+    application_url: str | None = None
+    auth_config: dict[str, Any] | None = None
+
+class ProjectUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    external_project_id: str | None = None
+    status: str | None = None
+    application_url: str | None = None
+    auth_config: dict[str, Any] | None = None
+    latest_crawl_id: str | None = None
+    crawl_knowledge: dict[str, Any] | None = None
+
+class ProjectRead(ORMModel):
+    id: uuid.UUID
+    name: str
+    description: str | None
+    external_project_id: str | None
+    status: str
+    application_url: str | None = None
+    auth_config: dict[str, Any] | None = None
+    latest_crawl_id: str | None = None
+    crawl_knowledge: dict[str, Any] | None = None
+    created_at: datetime
+    updated_at: datetime
 class InputPayload(BaseModel):
     tech_stack:dict=Field(default_factory=dict);functional_requirements:list=Field(default_factory=list);non_functional_requirements:list=Field(default_factory=list);epics:list=Field(default_factory=list);features:list=Field(default_factory=list);user_stories:list=Field(default_factory=list);acceptance_criteria:list=Field(default_factory=list);business_rules:list=Field(default_factory=list);dependencies:list=Field(default_factory=list);constraints:list=Field(default_factory=list)
 class InputRead(ORMModel): id:uuid.UUID;project_id:uuid.UUID;input_version:int;source_type:str;payload:dict;is_current:bool;created_at:datetime

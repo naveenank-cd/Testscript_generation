@@ -760,10 +760,17 @@ class {class_name}:
                 control.click()
 
     # ------------------------------------------------------------------
-    # stable_locator: resolves ONLY from the discovered element catalogue.
-    # Never invents a CSS selector from action text.
+    # stable_locator: consumes verified TestStep mapping primarily.
+    # Falls back to discovered catalogue matching only if mapping is absent.
     # ------------------------------------------------------------------
-    def stable_locator(self, instruction: str):
+    def stable_locator(self, instruction: str, step: dict | None = None):
+        if step and step.get("target_locator"):
+            loc = str(step["target_locator"])
+            if not loc.startswith("page.goto") and not loc.startswith("expect("):
+                if step.get("target_page"):
+                    self.restore_context({{"page_url": step["target_page"]}})
+                return self.page.locator(loc)
+
         ignored = {{
             "click", "press", "select", "choose", "check", "enter", "type",
             "fill", "button", "link", "field", "dropdown", "into", "from",
@@ -832,7 +839,13 @@ class {class_name}:
             f"Feature not found in application: no discovered element matches {{instruction!r}}"
         )
 
-    def perform(self, instruction: str):
+    def perform(self, instruction: str, step: dict | None = None):
+        if step and step.get("target_locator") and str(step["target_locator"]).startswith("page.goto"):
+            target_url = step.get("target_page") or BASE_URL
+            if self.page.url.rstrip("/") != target_url.rstrip("/"):
+                self.page.goto(target_url, wait_until="domcontentloaded")
+                self.page.wait_for_load_state("networkidle")
+            return
         lowered = instruction.lower()
         values = re.findall(r"[\\'\\\"]([^\\'\\\"]+)[\\'\\\"]", instruction)
         value = values[-1] if values else None
@@ -853,7 +866,7 @@ class {class_name}:
                     raise AssertionError(f"Title assertion requires an explicit value: {{instruction}}")
                 expect(self.page).to_have_title(re.compile(re.escape(value), re.I))
             else:
-                locator = self.stable_locator(instruction)
+                locator = self.stable_locator(instruction, step=step)
                 if "hidden" in lowered:
                     expect(locator).to_be_hidden()
                 elif "checked" in lowered and "unchecked" not in lowered:
@@ -872,23 +885,23 @@ class {class_name}:
             self.page.goto(BASE_URL, wait_until="domcontentloaded")
             self.page.wait_for_load_state("networkidle")
         elif "hover" in lowered:
-            locator = self.stable_locator(instruction)
+            locator = self.stable_locator(instruction, step=step)
             locator.wait_for(state="visible")
             locator.scroll_into_view_if_needed()
             locator.hover()
         elif "wait for" in lowered or "wait until" in lowered:
-            self.stable_locator(instruction).wait_for(state="visible")
+            self.stable_locator(instruction, step=step).wait_for(state="visible")
         elif "press" in lowered:
             key = re.search(r"\\b(Enter|Escape|Tab|Space|Arrow(?:Up|Down|Left|Right))\\b", instruction, re.I)
             if key is None:
                 raise AssertionError(f"Press action requires a supported key: {{instruction}}")
-            locator = self.stable_locator(instruction)
+            locator = self.stable_locator(instruction, step=step)
             locator.wait_for(state="visible")
             locator.press(key.group(1))
         elif any(token in lowered for token in ("select", "choose")):
             if value is None:
                 raise AssertionError(f"Selection has no explicit UI value: {{instruction}}")
-            locator = self.stable_locator(instruction)
+            locator = self.stable_locator(instruction, step=step)
             locator.wait_for(state="visible")
             locator.scroll_into_view_if_needed()
             if locator.evaluate("el => el.tagName.toLowerCase()") == "select":
@@ -897,12 +910,12 @@ class {class_name}:
                 locator.click()
                 self.page.get_by_role("option", name=re.compile(re.escape(value), re.I)).click()
         elif any(token in lowered for token in ("check", "uncheck")):
-            locator = self.stable_locator(instruction)
+            locator = self.stable_locator(instruction, step=step)
             locator.wait_for(state="visible")
             locator.scroll_into_view_if_needed()
             locator.uncheck() if "uncheck" in lowered else locator.check()
         elif any(token in lowered for token in ("click", "press")):
-            locator = self.stable_locator(instruction)
+            locator = self.stable_locator(instruction, step=step)
             locator.wait_for(state="visible")
             locator.scroll_into_view_if_needed()
             locator.click()
@@ -918,7 +931,7 @@ class {class_name}:
                 value = mapped_value
             elif value is None:
                 raise AssertionError(f"Input has no explicit UI value: {{instruction}}")
-            locator = self.stable_locator(instruction)
+            locator = self.stable_locator(instruction, step=step)
             locator.wait_for(state="visible")
             locator.scroll_into_view_if_needed()
             locator.fill(value)
@@ -958,7 +971,7 @@ def test_{_safe_name(test_case["test_case_id"]).replace("-", "_")}(page: Page):
     page.wait_for_load_state("networkidle")
     try:
         for step in STEPS:
-            app.perform(step["action"])
+            app.perform(step["action"], step=step)
             app.assert_expected(step["expected_result"])
     except Exception:
         page.screenshot(path="playwright-action-failure.png", full_page=True)
@@ -979,7 +992,139 @@ class AutomationService:
         self._workflow_crawl_jobs: dict[str, dict[str, Any]] = {}
         self._execution_jobs: dict[str, dict[str, Any]] = {}
         self._runtime_credentials: dict[str, Any] = {}
+        self._project_crawl_knowledge: dict[str, dict[str, Any]] = {}
         self.seacrawl = SeacrawlAdapter()
+
+    async def _persist_crawl_to_project(
+        self,
+        *,
+        project_id: uuid.UUID | None = None,
+        project_name: str | None = None,
+        application_url: str,
+        auth_config: dict | None = None,
+        crawl_id: str,
+        crawl_status: str,
+        pages_crawled: int,
+        elements_found: int,
+        page_title: str | None = None,
+        crawl_report: dict[str, Any],
+        application_map: dict[str, Any],
+        discovered_elements: list[Any],
+    ) -> tuple[uuid.UUID | None, str | None]:
+        element_list = []
+        for e in discovered_elements:
+            if hasattr(e, "model_dump"):
+                element_list.append(e.model_dump(mode="json"))
+            elif isinstance(e, dict):
+                element_list.append(e)
+            else:
+                element_list.append(str(e))
+
+        crawl_knowledge = {
+            "crawl_id": crawl_id,
+            "application_url": application_url,
+            "page_title": page_title,
+            "crawl_status": crawl_status,
+            "pages_crawled": pages_crawled,
+            "elements_found": elements_found,
+            "crawl_report": crawl_report,
+            "application_map": application_map,
+            "discovered_elements": element_list,
+            "locators": application_map.get("locators", {}),
+            "navigation_relationships": application_map.get("relationships", []),
+            "pages": application_map.get("pages", []),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        resolved_id = project_id
+        resolved_name = project_name
+
+        try:
+            from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+            from sqlalchemy.pool import NullPool
+            from app.core.config import settings
+            from app.services.project_service import ProjectService
+
+            # Use an isolated, unpooled engine scoped to the current event loop.
+            # On Windows, Playwright crawls run on a dedicated worker loop (_on_playwright_loop),
+            # so using the shared engine pool leads to cross-loop asyncpg Future conflicts.
+            scoped_engine = create_async_engine(
+                settings.database_url,
+                poolclass=NullPool,
+                connect_args={"timeout": settings.database_connect_timeout},
+            )
+            session_factory = async_sessionmaker(
+                bind=scoped_engine,
+                class_=AsyncSession,
+                expire_on_commit=False,
+            )
+            try:
+                async with session_factory() as session:
+                    project_svc = ProjectService(session)
+                    project = await project_svc.get_or_create_project(
+                        project_id=project_id,
+                        project_name=project_name,
+                        application_url=application_url,
+                        auth_config=auth_config,
+                    )
+                    crawl_knowledge["project_id"] = str(project.id)
+                    await project_svc.save_crawl_knowledge(
+                        entity_id=project.id,
+                        crawl_knowledge=crawl_knowledge,
+                        latest_crawl_id=crawl_id,
+                        application_url=application_url,
+                        auth_config=auth_config,
+                    )
+                    resolved_id = project.id
+                    resolved_name = project.name
+            finally:
+                await scoped_engine.dispose()
+        except Exception as exc:
+            logger.warning("Could not persist crawl knowledge to PostgreSQL database: %s", exc)
+            if resolved_id:
+                crawl_knowledge["project_id"] = str(resolved_id)
+
+        if resolved_id:
+            self._project_crawl_knowledge[str(resolved_id)] = crawl_knowledge
+
+        return resolved_id, resolved_name
+
+    async def get_project_crawl_knowledge(self, project_id: uuid.UUID | str) -> dict[str, Any] | None:
+        pid_str = str(project_id)
+        if pid_str in self._project_crawl_knowledge:
+            return self._project_crawl_knowledge[pid_str]
+        try:
+            from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+            from sqlalchemy.pool import NullPool
+            from app.core.config import settings
+            from app.services.project_service import ProjectService
+
+            scoped_engine = create_async_engine(
+                settings.database_url,
+                poolclass=NullPool,
+                connect_args={"timeout": settings.database_connect_timeout},
+            )
+            session_factory = async_sessionmaker(
+                bind=scoped_engine,
+                class_=AsyncSession,
+                expire_on_commit=False,
+            )
+            try:
+                async with session_factory() as session:
+                    project_svc = ProjectService(session)
+                    try:
+                        knowledge = await project_svc.get_crawl_knowledge(uuid.UUID(pid_str))
+                        if knowledge:
+                            self._project_crawl_knowledge[pid_str] = knowledge
+                            return knowledge
+                    except Exception:
+                        pass
+            finally:
+                await scoped_engine.dispose()
+        except Exception:
+            pass
+        return None
+
 
     def _crawl_job_response(self, job_id: str) -> CrawlJobResponse:
         job = self._crawl_jobs.get(job_id)
@@ -2765,7 +2910,13 @@ class AutomationService:
             "breadcrumb": "breadcrumbs depend on the active theme",
         }
         destructive_terms = {"delete account", "place order", "pay", "purchase", "logout"}
-        for index, test_case in enumerate(state.get("test_cases", []), start=1):
+        import copy
+        from app.services.application_knowledge_service import map_test_case_steps_to_crawl_evidence
+        crawl_k = crawl.get("crawl_knowledge") or crawl
+        local_test_cases = copy.deepcopy(state.get("test_cases", []))
+        map_test_case_steps_to_crawl_evidence(local_test_cases, crawl_k)
+
+        for index, test_case in enumerate(local_test_cases, start=1):
             test_text = " ".join([
                 str(test_case.get("title") or ""),
                 str(test_case.get("description") or ""),
@@ -2782,13 +2933,13 @@ class AutomationService:
                 elements=element_dicts,
             )
 
-            if not has_matching_evidence:
+            if not has_matching_evidence or test_case.get("evidence_status") == "unsupported_missing_evidence":
                 unsupported_requirements.append({
                     "test_case_id": str(test_case.get("test_case_id")),
                     "scenario_id": str(test_case.get("scenario_id")),
-                    "classification": "blocked",
+                    "classification": "UNSUPPORTED / MISSING EVIDENCE",
                     "reason": (
-                        f"No matching crawl evidence directly associated with acceptance criteria "
+                        f"UNSUPPORTED / MISSING EVIDENCE: No matching crawl evidence directly associated with acceptance criteria "
                         f"was found for test case '{test_case.get('title')}'. Marked as BLOCKED."
                     ),
                 })
@@ -3075,7 +3226,7 @@ class AutomationService:
             base_url=url,
             discovered_elements=element_dicts,
             page_inventory=crawl_report.get("page_inventory", []),
-            test_cases=state.get("test_cases", []),
+            test_cases=local_test_cases,
             scenarios=state.get("scenarios", []),
             credentials=(
                 getattr(request, "authentication", None)
@@ -3234,9 +3385,43 @@ class AutomationService:
             "pages_skipped": report.get("pages_skipped", []),
             "crawl_events": report.get("events", []),
         })
+        # Resolve project_id and project_name
+        req_project_id = getattr(request, "project_id", None)
+        req_project_name = getattr(request, "project_name", None)
+        if not req_project_id:
+            try:
+                wf_state = workflow_service.get(request.workflow_id)
+                if wf_state.get("project_id"):
+                    req_project_id = uuid.UUID(str(wf_state["project_id"]))
+                if not req_project_name:
+                    req_project_name = wf_state.get("project_name") or wf_state.get("name")
+            except Exception:
+                pass
+
+        auth_config = (
+            request.authentication.model_dump(mode="json")
+            if request.authentication else None
+        )
+        resolved_pid, resolved_pname = await self._persist_crawl_to_project(
+            project_id=req_project_id,
+            project_name=req_project_name,
+            application_url=url,
+            auth_config=auth_config,
+            crawl_id=crawl_id,
+            crawl_status=report.get("status", "crawl_incomplete"),
+            pages_crawled=int(report.get("pages_completed", 0)),
+            elements_found=len(elements),
+            page_title=title,
+            crawl_report=report,
+            application_map=application_map,
+            discovered_elements=elements,
+        )
+
         stored = {
             "crawl_id": crawl_id,
             "workflow_id": str(request.workflow_id),
+            "project_id": str(resolved_pid) if resolved_pid else None,
+            "project_name": resolved_pname,
             "application_url": url,
             "page_title": title,
             "crawl_report": report,
@@ -3265,6 +3450,8 @@ class AutomationService:
             crawl_report=report,
             application_map=application_map,
             discovered_elements=elements,
+            project_id=resolved_pid,
+            project_name=resolved_pname,
         )
 
     async def _cache_generation(self, generation_id: str) -> None:
@@ -3387,7 +3574,27 @@ class AutomationService:
             "pages_skipped": crawl_report.get("pages_skipped", []),
             "crawl_events": crawl_report.get("events", []),
         })
+        project_id = getattr(request, "project_id", None)
+        project_name = getattr(request, "project_name", None)
+        auth_config = (
+            request.authentication.model_dump(mode="json")
+            if request.authentication else None
+        )
         if crawl_report.get("status") == "crawl_blocked":
+            resolved_pid, resolved_pname = await self._persist_crawl_to_project(
+                project_id=project_id,
+                project_name=project_name,
+                application_url=url,
+                auth_config=auth_config,
+                crawl_id=crawl_id,
+                crawl_status="crawl_blocked",
+                pages_crawled=0,
+                elements_found=0,
+                page_title=title,
+                crawl_report=crawl_report,
+                application_map=application_map,
+                discovered_elements=[],
+            )
             response = CrawlGenerationResponse(
                 crawl_id=crawl_id,
                 url=url,
@@ -3399,6 +3606,8 @@ class AutomationService:
                 scripts=[],
                 discovered_elements=[],
                 application_map=application_map,
+                project_id=resolved_pid,
+                project_name=resolved_pname,
             )
             (directory / "crawl.json").write_text(
                 json.dumps(response.model_dump(mode="json"), default=str, indent=2),
@@ -3459,6 +3668,21 @@ class AutomationService:
         if crawl_report.get("status") == "crawl_incomplete":
             crawl_report["events"].append("partial_script_generation_completed")
 
+        resolved_pid, resolved_pname = await self._persist_crawl_to_project(
+            project_id=project_id,
+            project_name=project_name,
+            application_url=url,
+            auth_config=auth_config,
+            crawl_id=crawl_id,
+            crawl_status=crawl_report["status"],
+            pages_crawled=len(application_map.get("pages", [])),
+            elements_found=len(elements),
+            page_title=title,
+            crawl_report=crawl_report,
+            application_map=application_map,
+            discovered_elements=elements,
+        )
+
         response = CrawlGenerationResponse(
             crawl_id=crawl_id,
             url=url,
@@ -3470,6 +3694,8 @@ class AutomationService:
             scripts=scripts,
             discovered_elements=elements,
             application_map=application_map,
+            project_id=resolved_pid,
+            project_name=resolved_pname,
         )
 
         # Persist manifest for download route

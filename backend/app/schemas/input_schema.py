@@ -15,7 +15,7 @@ class ManualInputPayload(BaseModel):
 
 class WorkflowStartRequest(BaseModel):
     model_config=ConfigDict(extra="forbid")
-    project_id:uuid.UUID|None=None; source_type:SourceType=SourceType.manual; input_payload:ManualInputPayload|None=None; document_session_id:uuid.UUID|None=None; mock_mode:bool=False
+    project_id:uuid.UUID|None=None; project_name:str|None=None; source_type:SourceType=SourceType.manual; input_payload:ManualInputPayload|None=None; document_session_id:uuid.UUID|None=None; mock_mode:bool=False
     confidence_threshold:float=Field(default=0.95,ge=0,le=1)
     @model_validator(mode="after")
     def source_requirements(self):

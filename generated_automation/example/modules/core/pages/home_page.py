@@ -1,5 +1,5 @@
 """Page Object Model for HomePage."""
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Page, Locator, expect
 from shared.config.settings import settings
 
 class HomePage:
@@ -20,4 +20,8 @@ class HomePage:
         """Assert the page is loaded and body is visible."""
         expect(self.page.locator("body")).to_be_visible()
         return self
+
+    def get_element(self, selector: str) -> Locator:
+        """Retrieve Playwright locator for a selector."""
+        return self.page.locator(selector)
 

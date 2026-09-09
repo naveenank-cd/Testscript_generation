@@ -1,7 +1,9 @@
 """Pytest global fixtures for Playwright browser and page management."""
+import os
 import pytest
 from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
 from shared.config.settings import settings
+from shared.test_data.data_loader import load_test_data
 
 @pytest.fixture(scope="session")
 def browser():
@@ -33,10 +35,15 @@ def page(context: BrowserContext) -> Page:
     page.close()
 
 @pytest.fixture(scope="session")
-def default_credentials():
-    """Default test credentials from environment or test config."""
-    import os
+def test_data() -> dict:
+    """Session-scoped test data loader."""
+    return load_test_data()
+
+@pytest.fixture(scope="session")
+def default_credentials(test_data: dict) -> dict:
+    """Default test credentials loaded securely via data_loader."""
+    default_creds = test_data.get("credentials", {}).get("default", {})
     return {
-        "username": os.getenv("TEST_USERNAME", "standard_user"),
-        "password": os.getenv("TEST_PASSWORD", ""),
+        "username": os.getenv("TEST_USERNAME", default_creds.get("username", "standard_user")),
+        "password": os.getenv("TEST_PASSWORD", default_creds.get("password", "secret_sauce")),
     }

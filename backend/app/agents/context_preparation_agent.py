@@ -73,4 +73,22 @@ class ContextPreparationAgent(BaseAgent[StructuredContext]):
             story_id=str(story["id"])
             criterion_ids=[str(item["id"]) for item in payload["acceptance_criteria"] if str(item.get("user_story_id",""))==story_id]
             trace.append(TraceabilityEntry(source_id=story_id,target_ids=shared_target_ids+criterion_ids))
-        return StructuredContext(project_id=input_data.get("project_id") or uuid.uuid4(),source_type=input_data.get("source_type",SourceType.manual),traceability_map=trace,metadata={"normalized":True},**payload)
+        # Extract focused application knowledge from project crawl knowledge if available
+        crawl_knowledge = input_data.get("crawl_knowledge")
+        app_knowledge = None
+        if crawl_knowledge:
+            from app.services.application_knowledge_service import extract_relevant_application_knowledge
+            app_knowledge = extract_relevant_application_knowledge(
+                user_stories=payload["user_stories"],
+                acceptance_criteria=payload["acceptance_criteria"],
+                crawl_knowledge=crawl_knowledge,
+            )
+
+        return StructuredContext(
+            project_id=input_data.get("project_id") or uuid.uuid4(),
+            source_type=input_data.get("source_type", SourceType.manual),
+            traceability_map=trace,
+            application_knowledge=app_knowledge,
+            metadata={"normalized": True},
+            **payload,
+        )

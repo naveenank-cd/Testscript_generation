@@ -1,4 +1,9 @@
 [tool.pytest.ini_options]
 testpaths = ["modules"]
+pythonpath = ["."]
 python_files = ["test_*.py"]
 addopts = "-v --tb=short"
+markers = [
+    "regression: Regression test suite",
+    "smoke: Smoke test suite",
+]

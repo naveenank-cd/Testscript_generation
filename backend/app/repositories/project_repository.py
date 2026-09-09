@@ -6,4 +6,6 @@ from app.repositories.base_repository import BaseRepository
 class ProjectRepository(BaseRepository[Project]):
     def __init__(self, session: AsyncSession): super().__init__(session, Project)
     async def list_active(self): return list((await self.session.scalars(select(Project).where(Project.is_active.is_(True)).order_by(Project.created_at.desc()))).all())
+    async def get_by_name(self, name: str) -> Project | None:
+        return (await self.session.scalars(select(Project).where(Project.name == name, Project.is_active.is_(True)))).first()
     async def soft_delete(self, project): project.is_active=False; project.status="deleted"; await self.session.flush()

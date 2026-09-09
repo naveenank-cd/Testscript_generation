@@ -19,6 +19,7 @@ import { testCaseApi } from '../services/testCaseApi';
 import { EntityId } from '../components/TraceabilityUI';
 import type { CrawlGenerationResponse, CrawlJob } from '../types';
 import { downloadFile, friendlyError, friendlyId, registerFriendlyIds, setActiveProjectId } from '../utils';
+import { useTestCaseWorkflowStore } from '../store/workflowStore';
 
 function downloadAllAsZip(result: CrawlGenerationResponse) {
   const combined = result.scripts
@@ -28,7 +29,9 @@ function downloadAllAsZip(result: CrawlGenerationResponse) {
 }
 
 export function UrlCrawlerPage() {
+  const { projectId, setProjectId } = useTestCaseWorkflowStore();
   const [url, setUrl] = useState('');
+
   const [pageLimit, setPageLimit] = useState(250);
   const [depthLimit, setDepthLimit] = useState(15);
   const [maxExecutionTime, setMaxExecutionTime] = useState(300);
@@ -133,6 +136,7 @@ export function UrlCrawlerPage() {
         max_execution_time_seconds: maxExecutionTime,
         testing_scope: testingScope,
         authentication: authPayload,
+        project_id: projectId || undefined,
       });
       setCrawlJob(job);
     } catch (err) {
@@ -145,13 +149,20 @@ export function UrlCrawlerPage() {
   const script = result?.scripts[selectedScript];
   const partialResult = result?.crawl_status === 'crawl_incomplete';
   useEffect(() => {
-    const scope = result?.crawl_id || 'crawler';
-    setActiveProjectId(scope);
+    if (result?.project_id) {
+      setProjectId(result.project_id);
+      setActiveProjectId(result.project_id);
+    } else {
+      const scope = result?.crawl_id || 'crawler';
+      setActiveProjectId(scope);
+    }
     const scripts = result?.scripts ?? [];
+    const scope = result?.project_id || result?.crawl_id || 'crawler';
     registerFriendlyIds('script', scripts.map((script) => script.script_id), scope);
     registerFriendlyIds('scenario', scripts.map((script) => script.scenario_id), scope);
     registerFriendlyIds('case', scripts.map((script) => script.test_case_id), scope);
-  }, [result]);
+  }, [result, setProjectId]);
+
 
   return (
     <div className="space-y-6">

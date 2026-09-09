@@ -14,3 +14,11 @@ async def get(project_id:uuid.UUID,db:DBSession): return await ProjectService(db
 async def update(project_id:uuid.UUID,body:ProjectUpdate,db:DBSession): return await ProjectService(db).update(project_id,body.model_dump(exclude_unset=True))
 @router.delete("/{project_id}",status_code=204)
 async def delete(project_id:uuid.UUID,db:DBSession): await ProjectService(db).delete(project_id);return Response(status_code=204)
+@router.get("/{project_id}/crawl-knowledge", summary="Get persisted crawl and application knowledge for a project")
+async def get_crawl_knowledge(project_id: uuid.UUID, db: DBSession):
+    return await ProjectService(db).get_crawl_knowledge(project_id)
+
+@router.get("/{project_id}/generations", summary="Get all persistent requirement generations for a project")
+async def get_generations(project_id: uuid.UUID, db: DBSession):
+    return await ProjectService(db).get_generations(project_id)
+

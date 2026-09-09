@@ -9,4 +9,5 @@ class StructuredContext(BaseModel):
     epics:list[Any]=Field(default_factory=list); features:list[Any]=Field(default_factory=list); user_stories:list[Any]=Field(default_factory=list); acceptance_criteria:list[Any]=Field(default_factory=list)
     business_rules:list[Any]=Field(default_factory=list); dependencies:list[Any]=Field(default_factory=list); constraints:list[Any]=Field(default_factory=list); tech_stack:dict[str,Any]=Field(default_factory=dict)
     image_ids:list[str]=Field(default_factory=list); visual_context:list[dict[str,Any]]=Field(default_factory=list)
+    application_knowledge:dict[str,Any]|None=None
     traceability_map:list[TraceabilityEntry]=Field(default_factory=list); source_type:SourceType; metadata:dict[str,Any]=Field(default_factory=dict)

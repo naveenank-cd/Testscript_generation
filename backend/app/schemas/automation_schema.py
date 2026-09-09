@@ -25,6 +25,7 @@ class CrawlApplicationRequest(BaseModel):
     testing_scope: Literal["full_application", "specific_page"] = "full_application"
     authentication: PlaywrightAuthentication | None = None
     project_name: str | None = None
+    project_id: UUID | None = None
 
 
 
@@ -38,6 +39,8 @@ class CrawlAnalysisResponse(BaseModel):
     crawl_report: dict[str, Any] = Field(default_factory=dict)
     application_map: dict[str, Any] = Field(default_factory=dict)
     discovered_elements: list[DiscoveredElement] = Field(default_factory=list)
+    project_id: UUID | None = None
+    project_name: str | None = None
 
 
 class WorkflowCrawlJobResponse(BaseModel):
@@ -427,6 +430,8 @@ class CrawlAndGenerateRequest(BaseModel):
     repeated_state_limit: int = Field(default=5, ge=1, le=20)
     testing_scope: Literal["full_application", "specific_page"] = "full_application"
     authentication: PlaywrightAuthentication | None = None
+    project_id: UUID | None = None
+    project_name: str | None = None
 
 
 class CrawlGenerationResponse(BaseModel):
@@ -445,6 +450,8 @@ class CrawlGenerationResponse(BaseModel):
     scripts: list[GeneratedScript]
     discovered_elements: list[DiscoveredElement] = Field(default_factory=list)
     application_map: dict[str, Any] = Field(default_factory=dict)
+    project_id: UUID | None = None
+    project_name: str | None = None
 
 
 class CrawlJobResponse(BaseModel):

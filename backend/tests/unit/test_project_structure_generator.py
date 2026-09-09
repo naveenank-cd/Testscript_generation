@@ -176,3 +176,122 @@ def test_cross_page_pom_test_generation():
     test_file = next(f for f in project.files if "test_tc_e2e_01.py" in f.relative_path)
     assert "@pytest.mark.regression" in test_file.content
     assert "def test_login_and_add_to_cart_flow" in test_file.content
+
+
+def test_pom_never_assigned_to_first_page_arbitrarily():
+    """Verify test cases without verified target pages are never assigned to pages_meta[0]."""
+    generator = ProjectStructureGenerator(app_name="crm_app")
+
+    discovered_elements = [
+        {"tag": "input", "name": "email", "element_id": "email", "page_url": "https://crm.test/login"},
+        {"tag": "button", "name": "Submit", "element_id": "submit-lead", "page_url": "https://crm.test/leads"},
+    ]
+
+    test_cases = [
+        {
+            "test_case_id": "TC_UNSUPPORTED_01",
+            "scenario_id": "SC_001",
+            "title": "Quantum AI Lead Routing",
+            "evidence_status": "unsupported_missing_evidence",
+            "unsupported_evidence_reasons": ["No crawl-verified controls exist for Quantum routing"],
+            "steps": [
+                {"step_number": 1, "action": "Trigger quantum routing algorithm", "expected_result": "Algorithm completes", "evidence_status": "unsupported_missing_evidence"},
+            ],
+        }
+    ]
+
+    project = generator.generate_project(
+        base_url="https://crm.test/login",
+        discovered_elements=discovered_elements,
+        page_inventory=[
+            {"url": "https://crm.test/login", "title": "Login"},
+            {"url": "https://crm.test/leads", "title": "Leads"},
+        ],
+        test_cases=test_cases,
+    )
+
+    # Must NOT be assigned to modules/login/tests/ (pages_meta[0])
+    test_paths = [f.relative_path for f in project.files if "test_tc_unsupported_01.py" in f.relative_path]
+    assert len(test_paths) == 1
+    assert "modules/unsupported/tests/test_tc_unsupported_01.py" in test_paths
+    assert "modules/login/tests/test_tc_unsupported_01.py" not in test_paths
+
+    unsupported_file = next(f for f in project.files if "test_tc_unsupported_01.py" in f.relative_path)
+    assert "@pytest.mark.skip" in unsupported_file.content
+    assert "UNSUPPORTED / MISSING EVIDENCE" in unsupported_file.content
+
+
+def test_pom_module_selected_using_verified_target_page():
+    """Verify test case is placed in correct module based on step target_page, even when title lacks keywords."""
+    generator = ProjectStructureGenerator(app_name="store_app")
+
+    discovered_elements = [
+        {"tag": "input", "name": "user", "element_id": "user", "page_url": "https://store.test/login"},
+        {"tag": "button", "name": "Pay", "element_id": "btn-pay", "page_url": "https://store.test/checkout"},
+    ]
+
+    test_cases = [
+        {
+            "test_case_id": "TC_PAY_01",
+            "scenario_id": "SC_PAY",
+            "title": "Execute final transaction",  # Does NOT contain the word 'checkout' or 'login'
+            "steps": [
+                {
+                    "step_number": 1,
+                    "action": "Click 'Pay' button",
+                    "expected_result": "Payment confirmed",
+                    "target_page": "https://store.test/checkout",
+                    "target_element": "Pay",
+                    "target_locator": "#btn-pay",
+                    "evidence_status": "verified",
+                }
+            ],
+        }
+    ]
+
+    project = generator.generate_project(
+        base_url="https://store.test/login",
+        discovered_elements=discovered_elements,
+        page_inventory=[
+            {"url": "https://store.test/login", "title": "Login Page"},
+            {"url": "https://store.test/checkout", "title": "Checkout Page"},
+        ],
+        test_cases=test_cases,
+    )
+
+    test_paths = [f.relative_path for f in project.files if "test_tc_pay_01.py" in f.relative_path]
+    assert len(test_paths) == 1
+    # Must be placed under modules/checkout/tests/ because step target_page is /checkout
+    assert "modules/checkout/tests/test_tc_pay_01.py" in test_paths
+    assert "modules/login/tests/test_tc_pay_01.py" not in test_paths
+
+    test_file = next(f for f in project.files if "test_tc_pay_01.py" in f.relative_path)
+    assert "#btn-pay" in test_file.content
+    assert "checkout_page" in test_file.content
+
+
+def test_script_generation_consumes_verified_mapping():
+    """Verify _python_source generates code that consumes verified step mapping."""
+    from app.services.automation_service import _python_source
+
+    test_case = {
+        "test_case_id": "TC_MAP_99",
+        "title": "Add backpack using verified locator",
+        "steps": [
+            {
+                "step_number": 1,
+                "action": "Click 'Add to cart' button",
+                "expected_result": "Backpack in cart",
+                "target_page": "https://www.saucedemo.com/inventory.html",
+                "target_element": "Add to cart",
+                "target_locator": "[data-testid='add-to-cart-sauce-labs-backpack']",
+                "evidence_status": "verified",
+            }
+        ],
+    }
+
+    code = _python_source(test_case, "https://www.saucedemo.com/", discovered_elements=[])
+    assert "def stable_locator(self, instruction: str, step: dict | None = None):" in code
+    assert "app.perform(step[\"action\"], step=step)" in code
+    assert "[data-testid='add-to-cart-sauce-labs-backpack']" in code
+

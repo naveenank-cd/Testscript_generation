@@ -18,7 +18,7 @@ const DOCUMENT_MAX_SIZE_MB = Number(process.env.NEXT_PUBLIC_DOCUMENT_MAX_SIZE_MB
 
 export function InputPage() {
   const router = useRouter();
-  const { hydrate, setWorkflow } = useTestCaseWorkflowStore();
+  const { projectId, hydrate, setWorkflow } = useTestCaseWorkflowStore();
   const [projectName, setProjectName] = useState(loadActiveProjectName);
   const [payload, setPayload] = useState<ManualInputPayload>(() => structuredClone(EMPTY_PAYLOAD));
   const [submitting, setSubmitting] = useState(false);
@@ -36,7 +36,25 @@ export function InputPage() {
   const [documentLoading, setDocumentLoading] = useState(false);
   const [documentError, setDocumentError] = useState('');
 
+  // Structured dynamic user stories (each with its own acceptance criteria list)
+  const [structuredStories, setStructuredStories] = useState<Array<{ id: string; text: string; acceptance_criteria: string[] }>>([
+    { id: '1', text: '', acceptance_criteria: [''] },
+  ]);
+  const [projectCrawlKnowledge, setProjectCrawlKnowledge] = useState<any>(null);
+  const [projectGenerations, setProjectGenerations] = useState<any[]>([]);
+
   useEffect(() => hydrate(), [hydrate]);
+
+  useEffect(() => {
+    if (projectId) {
+      testCaseApi.getProjectCrawlKnowledge(projectId).then((k) => {
+        if (k) setProjectCrawlKnowledge(k);
+      }).catch(() => undefined);
+      testCaseApi.getProjectGenerations(projectId).then((gens) => {
+        if (gens && Array.isArray(gens)) setProjectGenerations(gens);
+      }).catch(() => undefined);
+    }
+  }, [projectId]);
 
   const updateList = (key: Exclude<keyof ManualInputPayload, 'tech_stack'>, values: string[]) =>
     setPayload((current) => ({ ...current, [key]: values }));
@@ -108,6 +126,15 @@ export function InputPage() {
       setUserStoryError('Each extracted user story must have at least one acceptance criterion.');
       return;
     }
+    if (!documentSession) {
+      const validStories = structuredStories.filter((s) => s.text.trim().length > 0);
+      if (validStories.length > 0) {
+        cleaned.user_stories = validStories.map((s) => s.text.trim());
+        cleaned.acceptance_criteria = validStories.flatMap((s) =>
+          s.acceptance_criteria.map((ac) => ac.trim()).filter(Boolean)
+        );
+      }
+    }
     if (!cleaned.user_stories.length) {
       setUserStoryError('Enter at least one user story to start generation.');
       return;
@@ -126,8 +153,8 @@ export function InputPage() {
         await testCaseApi.updateDocumentSession(documentSession.session_id, documentStories);
       }
       const response = await testCaseApi.startWorkflow(documentSession
-        ? { source_type: 'manual', document_session_id: documentSession.session_id, mock_mode: mockMode, confidence_threshold: confidenceThreshold / 100 }
-        : { source_type: 'manual', input_payload: cleaned, mock_mode: mockMode, confidence_threshold: confidenceThreshold / 100 });
+        ? { project_id: projectId || undefined, project_name: projectName.trim() || undefined, source_type: 'manual', document_session_id: documentSession.session_id, mock_mode: mockMode, confidence_threshold: confidenceThreshold / 100 }
+        : { project_id: projectId || undefined, project_name: projectName.trim() || undefined, source_type: 'manual', input_payload: cleaned, mock_mode: mockMode, confidence_threshold: confidenceThreshold / 100 });
       setWorkflow(response.workflow_id, response.project_id, projectName.trim() || undefined);
       router.push('/test-case-generation/progress');
     } catch (requestError) {
@@ -156,6 +183,51 @@ export function InputPage() {
       <form onSubmit={submit} className="space-y-6">
         {error && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-600 dark:text-red-300">{error}</div>}
         
+        {/* Saved Project Crawl Knowledge Banner */}
+        {projectCrawlKnowledge && (
+          <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-5 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="flex h-3 w-3 rounded-full bg-emerald-500 animate-pulse" />
+                <div>
+                  <h3 className="text-sm font-bold text-emerald-700 dark:text-emerald-300">
+                    Reusing Saved Application Knowledge
+                  </h3>
+                  <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-0.5">
+                    {projectCrawlKnowledge.application_url} · {projectCrawlKnowledge.pages_crawled || projectCrawlKnowledge.application_map?.pages?.length || 0} pages · {projectCrawlKnowledge.elements_found || projectCrawlKnowledge.discovered_elements?.length || 0} verified elements discovered
+                  </p>
+                </div>
+              </div>
+              <span className="rounded-md bg-emerald-600/20 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+                Default: No Re-crawl Needed
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Existing Generations Card */}
+        {projectGenerations.length > 0 && (
+          <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-bold text-foreground">
+                Previous Generations in this Project ({projectGenerations.length})
+              </h3>
+              <span className="text-xs text-muted-foreground">Generations are independent and preserved</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {projectGenerations.map((gen, i) => (
+                <div key={gen.workflow_id} className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-1.5 text-xs">
+                  <span className="font-semibold text-primary">Gen {projectGenerations.length - i}</span>
+                  <span className="text-muted-foreground">({gen.user_story_count} stories · {gen.test_case_count} tests)</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${gen.status === 'completed' ? 'bg-green-500/20 text-green-600' : 'bg-amber-500/20 text-amber-600'}`}>
+                    {gen.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Project Name Input Card */}
         <section className="rounded-2xl border border-primary/20 bg-card p-5 shadow-sm sm:p-6">
           <div className="flex items-center gap-3 mb-3">
@@ -230,18 +302,135 @@ export function InputPage() {
           <p className="mt-3 text-xs text-muted-foreground">Prefer typing? Manual entry below remains available. Remove the document to generate from manual fields.</p>
         </section>
         {!documentSession && (
-          <section className="grid gap-6 rounded-2xl border border-border bg-card p-5 shadow-sm sm:p-6 lg:grid-cols-2">
-            {VISIBLE_INPUT_FIELDS.map((key) => (
-              <DynamicListField
-                key={key}
-                label={FIELD_LABELS[key]}
-                values={payload[key]}
-                required={key === 'user_stories'}
-                recommended={key === 'acceptance_criteria'}
-                error={key === 'user_stories' ? userStoryError : undefined}
-                onChange={(values) => updateList(key, values)}
-              />
-            ))}
+          <section className="space-y-4 rounded-2xl border border-border bg-card p-5 shadow-sm sm:p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="font-semibold text-foreground">User Stories &amp; Acceptance Criteria</h2>
+                <p className="mt-0.5 text-xs text-muted-foreground">Add any number of user stories. For each user story, specify its own acceptance criteria.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setStructuredStories((current) => [...current, { id: String(Date.now()), text: '', acceptance_criteria: [''] }])}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20 transition"
+              >
+                <Plus className="h-4 w-4" /> Add User Story
+              </button>
+            </div>
+
+            {userStoryError && <p role="alert" className="text-sm font-medium text-red-500">{userStoryError}</p>}
+
+            <div className="space-y-4">
+              {structuredStories.map((story, storyIdx) => (
+                <div key={story.id || storyIdx} className="rounded-xl border border-border bg-background p-4 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="rounded-md bg-primary/10 px-2 py-0.5 text-xs font-bold text-primary">
+                      Story #{storyIdx + 1}
+                    </span>
+                    {structuredStories.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => setStructuredStories((current) => current.filter((_, idx) => idx !== storyIdx))}
+                        className="rounded-lg p-1 text-red-500 hover:bg-red-500/10 transition"
+                        aria-label={`Remove user story ${storyIdx + 1}`}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="mt-2">
+                    <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                      User Story Description
+                    </label>
+                    <textarea
+                      value={story.text}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setStructuredStories((current) =>
+                          current.map((item, idx) => (idx === storyIdx ? { ...item, text: val } : item))
+                        );
+                      }}
+                      placeholder="e.g., As a Caregiver Admin, I want to review conflicting appointments so that overlapping schedules are prevented."
+                      rows={2}
+                      className="mt-1 w-full rounded-lg border border-input bg-card p-3 text-sm outline-none focus:border-primary transition"
+                    />
+                  </div>
+
+                  {/* Acceptance Criteria for this specific story */}
+                  <div className="mt-3 space-y-2 border-t border-border/60 pt-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                        Acceptance Criteria ({story.acceptance_criteria.length})
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setStructuredStories((current) =>
+                            current.map((item, idx) =>
+                              idx === storyIdx
+                                ? { ...item, acceptance_criteria: [...item.acceptance_criteria, ''] }
+                                : item
+                            )
+                          )
+                        }
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+                      >
+                        <Plus className="h-3.5 w-3.5" /> Add AC
+                      </button>
+                    </div>
+
+                    {story.acceptance_criteria.map((ac, acIdx) => (
+                      <div key={acIdx} className="flex items-start gap-2">
+                        <textarea
+                          value={ac}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setStructuredStories((current) =>
+                              current.map((item, idx) =>
+                                idx === storyIdx
+                                  ? {
+                                      ...item,
+                                      acceptance_criteria: item.acceptance_criteria.map((c, cIdx) =>
+                                        cIdx === acIdx ? val : c
+                                      ),
+                                    }
+                                  : item
+                              )
+                            );
+                          }}
+                          placeholder={`Acceptance Criterion ${acIdx + 1} (e.g. Show Caregiver Conflict when travel time is insufficient)`}
+                          rows={1}
+                          className="min-h-12 flex-1 rounded-lg border border-input bg-card p-2.5 text-sm outline-none focus:border-primary transition"
+                        />
+                        {story.acceptance_criteria.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setStructuredStories((current) =>
+                                current.map((item, idx) =>
+                                  idx === storyIdx
+                                    ? {
+                                        ...item,
+                                        acceptance_criteria: item.acceptance_criteria.filter(
+                                          (_, cIdx) => cIdx !== acIdx
+                                        ),
+                                      }
+                                    : item
+                                )
+                              )
+                            }
+                            className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition self-center"
+                            aria-label={`Remove criterion ${acIdx + 1}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </section>
         )}
 

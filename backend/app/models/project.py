@@ -1,6 +1,6 @@
 import uuid
 from sqlalchemy import Boolean, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database.base import Base
 from app.models.base import TimestampMixin, UUIDMixin
@@ -13,5 +13,10 @@ class Project(UUIDMixin, TimestampMixin, Base):
     source_system: Mapped[str | None] = mapped_column(String(100))
     status: Mapped[str] = mapped_column(String(50), default="active", index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    application_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    auth_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    latest_crawl_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    crawl_knowledge: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+
