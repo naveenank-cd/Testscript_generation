@@ -44,6 +44,6 @@ def default_credentials(test_data: dict) -> dict:
     """Default test credentials loaded securely via data_loader."""
     default_creds = test_data.get("credentials", {}).get("default", {})
     return {
-        "username": os.getenv("TEST_USERNAME", default_creds.get("username", "standard_user")),
-        "password": os.getenv("TEST_PASSWORD", default_creds.get("password", "secret_sauce")),
+        "username": os.getenv("TEST_USERNAME", default_creds.get("username", "test_user")),
+        "password": os.getenv("TEST_PASSWORD", default_creds.get("password", "")),
     }

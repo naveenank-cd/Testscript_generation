@@ -286,15 +286,15 @@ def assert_element_text(locator: Locator, expected_text: str, timeout: int = 100
         )
 
         # Conftest (Pytest Fixtures)
-        ident = "standard_user"
-        pwd = "secret_sauce"
+        ident = "test_user"
+        pwd = ""
         if credentials:
             if hasattr(credentials, "get_identifier") and credentials.get_identifier:
                 ident = credentials.get_identifier
             elif isinstance(credentials, dict):
-                ident = credentials.get("identifier") or credentials.get("email") or credentials.get("username") or "standard_user"
+                ident = credentials.get("identifier") or credentials.get("email") or credentials.get("username") or "test_user"
             elif hasattr(credentials, "identifier") or hasattr(credentials, "email"):
-                ident = getattr(credentials, "identifier", None) or getattr(credentials, "email", None) or "standard_user"
+                ident = getattr(credentials, "identifier", None) or getattr(credentials, "email", None) or "test_user"
 
             if hasattr(credentials, "password") and credentials.password:
                 pwd = credentials.password.get_secret_value() if hasattr(credentials.password, "get_secret_value") else str(credentials.password)
@@ -769,7 +769,7 @@ def {safe_func_name}() -> None:
                 actions_list.append(f"        {step_slug}_page.fill_password(default_credentials['password'])")
                 actions_list.append(f"    if hasattr({step_slug}_page, 'click_login_button'):")
                 actions_list.append(f"        {step_slug}_page.click_login_button()")
-            elif any(w in action_lower for w in ("assert", "verify", "loaded", "visible", "cart", "product")):
+            elif any(w in action_lower for w in ("assert", "verify", "loaded", "visible", "displayed", "present", "shown")) :
                 actions_list.append(f"    {step_slug}_page.assert_loaded()")
 
         steps_block = "\n".join(actions_list)
@@ -811,7 +811,7 @@ def {safe_func_name}(page: Page, default_credentials: dict) -> None:
                 project.files.append(GeneratedFile(relative_path=p, content='"""Package marker."""\n'))
 
     def _add_root_config_files(self, project: ModularProject, base_url: str, credentials: Optional[Any] = None) -> None:
-        ident = "standard_user"
+        ident = "test_user"
         if credentials:
             if hasattr(credentials, "get_identifier"):
                 ident = credentials.get_identifier() if callable(credentials.get_identifier) else credentials.get_identifier
@@ -822,8 +822,8 @@ def {safe_func_name}(page: Page, default_credentials: dict) -> None:
             elif hasattr(credentials, "username") and credentials.username:
                 ident = credentials.username
             elif isinstance(credentials, dict):
-                ident = credentials.get("identifier") or credentials.get("email") or credentials.get("username") or "standard_user"
-        ident = str(ident or "standard_user")
+                ident = credentials.get("identifier") or credentials.get("email") or credentials.get("username") or "test_user"
+        ident = str(ident or "test_user")
 
         requirements_txt = """playwright>=1.40.0
 pytest>=8.0.0
@@ -835,7 +835,7 @@ python-dotenv>=1.0.0
         env_example = f"""# Test Automation Environment Variables
 APP_BASE_URL={base_url}
 TEST_USERNAME={ident}
-TEST_PASSWORD=secret_sauce
+TEST_PASSWORD=your_password_here
 HEADLESS=true
 DEFAULT_TIMEOUT=10000
 SLOW_MO=0

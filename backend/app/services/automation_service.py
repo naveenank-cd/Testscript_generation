@@ -590,12 +590,12 @@ def _is_unsupported_post_registration_behavior(
     ]
     
     concept_ac_support = {
-        r"success message": [r"success", r"confirm", r"completed", r"created", r"scheduled", r"assigned", r"appointment", r"allow", r"validate", r"restrict", r"authorized"],
-        r"confirmation": [r"confirm", r"success", r"created", r"scheduled", r"assigned", r"appointment", r"allow", r"validate", r"restrict", r"authorized", r"business hours", r"date", r"time", r"schedule"],
+        r"success message": [r"success", r"confirm", r"completed", r"created", r"allow", r"validate", r"restrict", r"authorized", r"passed", r"saved", r"submitted", r"updated"],
+        r"confirmation": [r"confirm", r"success", r"created", r"allow", r"validate", r"restrict", r"authorized", r"saved", r"submitted", r"date", r"time", r"schedule"],
         r"account created": [r"account", r"register", r"create", r"sign up"],
         r"logged in": [r"login", r"log in", r"sign in", r"authenticate"],
-        r"dashboard": [r"dashboard", r"home", r"overview", r"portal", r"appointment", r"admin", r"caregiver"],
-        r"redirect": [r"redirect", r"navigate", r"view", r"details", r"available", r"appointment", r"list", r"table", r"display", r"overview", r"created"],
+        r"dashboard": [r"dashboard", r"home", r"overview", r"portal", r"admin", r"main"],
+        r"redirect": [r"redirect", r"navigate", r"view", r"details", r"available", r"list", r"table", r"display", r"overview", r"created"],
         r"check email": [r"email", r"inbox", r"mail", r"verification link"],
         r"inbox": [r"inbox", r"email", r"mail"],
     }
@@ -3844,8 +3844,7 @@ class AutomationService:
             "details", "detail", "occurrence", "section", "screen", "slot", "slots",
             "both", "all", "each", "every", "new", "same", "first", "second",
             "one", "two", "has", "is", "are", "were", "was", "be", "been",
-            "having", "before", "after", "next", "previous", "then", "when",
-            "appointment", "appointments", "series", "dialog", "card",
+            "dialog", "card",
         }
         quoted = re.findall(r"['\"]([^'\"]+)['\"]", clean_action)
         lowered = clean_action.lower()
@@ -3950,10 +3949,9 @@ class AutomationService:
             candidates.extend([
                 page.locator(f"[title*={json.dumps(phrase_clean)} i]"),
                 page.locator(f"[aria-label*={json.dumps(phrase_clean)} i]"),
-                page.locator(f"[data-cd-testid*={json.dumps(phrase_clean)} i]"),
                 page.locator(f"button:has-text({json.dumps(phrase_clean)})"),
             ])
-            # Check variations with hyphens/spaces (e.g. 'Auto-Renew' vs 'Auto Renew')
+            # Check variations with hyphens/spaces (e.g. 'Sign-In' vs 'Sign In')
             if " " in phrase_clean or "-" in phrase_clean:
                 hyphen_variant = phrase_clean.replace(" ", "-")
                 space_variant = phrase_clean.replace("-", " ")
@@ -3961,7 +3959,6 @@ class AutomationService:
                 for variant in (hyphen_variant, space_variant, compact_variant):
                     candidates.append(page.locator(f"[title*={json.dumps(variant)} i]"))
                     candidates.append(page.locator(f"[aria-label*={json.dumps(variant)} i]"))
-                    candidates.append(page.locator(f"[data-cd-testid*={json.dumps(variant)} i]"))
                     candidates.append(page.get_by_text(re.compile(re.escape(variant), re.I)))
 
         resolved = []
@@ -3978,9 +3975,9 @@ class AutomationService:
         if resolved:
             return resolved
 
-        # Table row fallback: if this is a table/list view and the phrase mentions appointments/items
+        # Table row fallback: if this is a table/list view and the action targets selecting a row or item
         try:
-            table_row = page.locator("tr[data-cd-testid*='TableRow'], tbody tr").first
+            table_row = page.locator("tbody tr, [role='row']").first
             if await table_row.count() and await table_row.is_visible():
                 resolved.append((table_row, "table_row | first visible record"))
                 return resolved
@@ -4353,17 +4350,15 @@ class AutomationService:
                 page, phrase, roles, discovered_elements
             )
         except LookupError as lookup_err:
-            if any(t in lowered for t in ("appointment", "series", "row", "record", "item", "select", "details")):
+            if any(t in lowered for t in ("row", "record", "item", "select", "details", "table", "list")):
                 try:
-                    first_row = page.locator("tr[data-cd-testid*='TableRow'], tbody tr").first
+                    first_row = page.locator("tbody tr, [role='row']").first
                     if await first_row.count() and await first_row.is_visible():
                         await first_row.click(timeout=int(settings.automation_action_timeout_seconds * 1000))
                         await page.wait_for_timeout(300)
                         return "table_row | clicked first record"
                 except Exception:
                     pass
-            if any(t in lowered for t in ("auto-renew", "auto renew", "autorenew", "renew")):
-                return f"simulated | {action}"
             raise lookup_err
         last_error: Exception | None = None
         for locator, description in locators:
@@ -5229,22 +5224,13 @@ class AutomationService:
                 test_case = cases.get(script.test_case_id, {"steps": []})
                 tc_title = str(test_case.get("title") or "").lower()
                 
-                # Check for login/auth/register keywords in title, while ignoring logout/signout
+                # Determine if this script requires an unauthenticated context
                 target_url_lower = str(script.page_url or "").lower()
                 is_logout = any(token in tc_title for token in ("logout", "signout", "sign-out", "log-out"))
-                is_login_tc = any(token in tc_title for token in ("login", "signin", "sign-in", "log-in", "register", "signup", "sign-up", "credential", "auth")) and not is_logout
+                is_login_flow = any(token in tc_title for token in ("login", "signin", "sign-in", "log-in", "register", "signup", "sign-up", "credential", "auth")) and not is_logout
+                is_auth_entry = any(token in target_url_lower for token in ("login", "signin", "sign-in", "log-in", "register", "signup", "sign-up", "auth"))
 
-                # Only run unauthenticated if the test explicitly targets the login page or tests authentication directly.
-                # If the test is targeting protected resources (/appointments, /caregivers, /settings, /users, etc.), it MUST be authenticated.
-                is_protected_target = any(
-                    protected in target_url_lower
-                    for protected in ("appointment", "caregiver", "participant", "availab", "audit", "setting", "user", "dashboard", "ptorequest")
-                )
-                
-                if (is_login_tc and not is_protected_target) or "login" in target_url_lower:
-                    use_auth_state = False
-                elif "valid login" in tc_title:
-                    # Pure valid login test case starts unauthenticated to perform login
+                if is_login_flow or is_auth_entry:
                     use_auth_state = False
                 
                 script_storage_state = worker_storage_state if use_auth_state else None

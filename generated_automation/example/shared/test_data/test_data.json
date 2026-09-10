@@ -1,11 +1,11 @@
 {
   "credentials": {
     "default": {
-      "username": "standard_user",
+      "username": "test_user",
       "password": ""
     },
     "invalid_password": {
-      "username": "standard_user",
+      "username": "test_user",
       "password": "WrongPassword!999"
     },
     "invalid_user": {

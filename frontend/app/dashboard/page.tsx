@@ -44,18 +44,34 @@ const formatDate = (value: string, isMounted = true) => {
   }
 };
 
-type ProjectRow = TestProjectRecord & { client?: string; progress?: number };
+type ProjectRow = {
+  id: string;
+  name: string;
+  application_url?: string;
+  status: string;
+  crawlStatus: 'crawled' | 'pending';
+  pagesCrawled: number;
+  elementsFound: number;
+  generationCount: number;
+  scenarioCount: number;
+  testCaseCount: number;
+  scriptCount: number;
+  createdAt: string;
+  updatedAt: string;
+  progress: number;
+};
 
 function DashboardContent() {
   const searchParams = useSearchParams();
   const initialQuery = searchParams.get('q') || '';
 
-  const { projects, workflowId, hydrate, setWorkflow, setResult, deleteProject, renameProject } = useTestCaseWorkflowStore();
+  const { setProject, hydrate } = useTestCaseWorkflowStore();
   const [query, setQuery] = useState(initialQuery);
   const [statusFilter, setStatusFilter] = useState<'all' | 'in_progress' | 'completed' | 'blocked'>('all');
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('table');
   const [mounted, setMounted] = useState(false);
   const [backendProjects, setBackendProjects] = useState<BackendProject[]>([]);
+  const [projectGenerationsMap, setProjectGenerationsMap] = useState<Record<string, any[]>>({});
 
   // ── Selection mode state ─────────────────────────────────────────────────
   const [selectMode, setSelectMode] = useState(false);
@@ -65,6 +81,12 @@ function DashboardContent() {
   const [editingProject, setEditingProject] = useState<ProjectRow | null>(null);
   const [newProjectName, setNewProjectName] = useState('');
 
+  // ── Create Project modal state ──────────────────────────────────────────
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createProjectName, setCreateProjectName] = useState('');
+  const [createAppUrl, setCreateAppUrl] = useState('');
+  const [createLoading, setCreateLoading] = useState(false);
+
   const handleOpenRename = (project: ProjectRow) => {
     setEditingProject(project);
     setNewProjectName(project.name);
@@ -73,40 +95,73 @@ function DashboardContent() {
   const handleSaveRename = () => {
     if (!editingProject || !newProjectName.trim()) return;
     const trimmed = newProjectName.trim();
-    renameProject(editingProject.workflowId, trimmed);
-    projectService.updateProject(editingProject.workflowId, { name: trimmed }).catch(() => undefined);
-    setBackendProjects(prev => prev.map(p => p.id === editingProject.workflowId ? { ...p, name: trimmed } : p));
+    projectService.updateProject(editingProject.id, { name: trimmed }).catch(() => undefined);
+    setBackendProjects(prev => prev.map(p => p.id === editingProject.id ? { ...p, name: trimmed } : p));
     setEditingProject(null);
     setNewProjectName('');
+  };
+
+  const handleCreateProject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!createProjectName.trim()) return;
+    setCreateLoading(true);
+    try {
+      const created = await projectService.createProject({
+        name: createProjectName.trim(),
+        application_url: createAppUrl.trim() || undefined,
+      });
+      if (created && (created as any).id) {
+        setBackendProjects(prev => [created as any, ...prev]);
+        setShowCreateModal(false);
+        setCreateProjectName('');
+        setCreateAppUrl('');
+      }
+    } catch {
+      // Error handled gracefully
+    } finally {
+      setCreateLoading(false);
+    }
   };
 
   useEffect(() => {
     setMounted(true);
     projectService.getProjects()
-      .then(data => { if (Array.isArray(data)) setBackendProjects(data); })
+      .then(async (data) => {
+        if (Array.isArray(data)) {
+          setBackendProjects(data);
+          // Load generations for each project in parallel
+          const gensMap: Record<string, any[]> = {};
+          await Promise.all(
+            data.map(async (p) => {
+              try {
+                const gens = await projectService.getGenerations(p.id);
+                if (Array.isArray(gens)) {
+                  gensMap[p.id] = gens;
+                }
+              } catch {
+                gensMap[p.id] = [];
+              }
+            })
+          );
+          setProjectGenerationsMap(gensMap);
+        }
+      })
       .catch(() => undefined);
   }, []);
 
   useEffect(() => hydrate(), [hydrate]);
 
-  useEffect(() => {
-    if (!workflowId) return;
-    testCaseApi.getWorkflowResult(workflowId).then(setResult).catch(() => undefined);
-  }, [setResult, workflowId]);
-
   // ── Single delete ────────────────────────────────────────────────────────
   const handleDelete = (project: ProjectRow) => {
     if (!window.confirm(`Delete "${project.name}"? This cannot be undone.`)) return;
-    deleteProject(project.workflowId);
-    projectService.deleteProject(project.workflowId).catch(() => undefined);
-    setBackendProjects(prev => prev.filter(p => p.id !== project.workflowId));
+    projectService.deleteProject(project.id).catch(() => undefined);
+    setBackendProjects(prev => prev.filter(p => p.id !== project.id));
   };
 
   // ── Instant 1-click Bulk delete ──────────────────────────────────────────
   const handleBulkDelete = () => {
     if (selectedIds.size === 0) return;
     selectedIds.forEach(id => {
-      deleteProject(id);
       projectService.deleteProject(id).catch(() => undefined);
     });
     setBackendProjects(prev => prev.filter(p => !selectedIds.has(p.id)));
@@ -136,69 +191,88 @@ function DashboardContent() {
     }
   };
 
-  // ── Combine real store projects and live backend projects ────────────────
-  const combinedProjects = useMemo(() => {
-    const map = new Map<string, ProjectRow>();
+  // ── Combine backend projects and generation metrics ──────────────────────
+  const combinedProjects = useMemo((): ProjectRow[] => {
+    return backendProjects.map(bp => {
+      const gens = projectGenerationsMap[bp.id] || [];
+      const hasCrawl = Boolean(bp.crawl_knowledge && Object.keys(bp.crawl_knowledge).length > 0);
+      const pagesCrawled = bp.crawl_knowledge?.pages_crawled || bp.crawl_knowledge?.application_map?.pages?.length || 0;
+      const elementsFound = bp.crawl_knowledge?.elements_found || bp.crawl_knowledge?.discovered_elements?.length || 0;
 
-    backendProjects.forEach(bp => {
-      map.set(bp.id, {
-        workflowId: bp.id,
-        projectId: bp.id,
+      const totalScenarios = gens.reduce((sum, g) => sum + (g.scenario_count || (g.scenarios?.length || 0)), 0);
+      const totalTestCases = gens.reduce((sum, g) => sum + (g.test_case_count || (g.test_cases?.length || 0)), 0);
+      const totalScripts = gens.reduce((sum, g) => sum + (g.script_count || 0), 0);
+
+      const isCompleted = bp.status === 'completed' || (gens.length > 0 && gens.every(g => g.status === 'completed'));
+      const isBlocked = bp.status === 'blocked';
+
+      return {
+        id: bp.id,
         name: bp.name,
-        client: bp.description || 'API Integration Scope',
-        status: bp.status === 'completed' ? 'completed' : 'in_progress',
+        application_url: bp.application_url,
+        status: isCompleted ? 'completed' : isBlocked ? 'blocked' : 'in_progress',
+        crawlStatus: hasCrawl ? 'crawled' : 'pending',
+        pagesCrawled,
+        elementsFound,
+        generationCount: gens.length,
+        scenarioCount: totalScenarios,
+        testCaseCount: totalTestCases,
+        scriptCount: totalScripts,
         createdAt: bp.created_at || new Date().toISOString(),
         updatedAt: bp.updated_at || new Date().toISOString(),
-        scenarioCount: 0,
-        testCaseCount: 0,
-        scriptCount: 0,
-        progress: bp.status === 'completed' ? 100 : 50,
-      });
+        progress: isCompleted ? 100 : gens.length > 0 ? 75 : hasCrawl ? 40 : 15,
+      };
     });
-
-    projects.forEach(p => {
-      const existing = map.get(p.workflowId);
-      map.set(p.workflowId, {
-        ...p,
-        client: (p as unknown as { client?: string }).client || existing?.client || 'General Scope',
-        progress: (p as unknown as { progress?: number }).progress || (p.status === 'completed' ? 100 : 50)
-      });
-    });
-
-    return Array.from(map.values());
-  }, [projects, backendProjects]);
+  }, [backendProjects, projectGenerationsMap]);
 
   // ── Dynamic live stats from real project data ────────────────────────────
   const liveStats = useMemo(() => {
     const projectsCreated = combinedProjects.length;
     const testCaseCount = combinedProjects.reduce((acc, p) => acc + (p.testCaseCount || 0), 0);
-    const totalScripts = combinedProjects.reduce((acc, p) => acc + (p.scriptCount || 0), 0);
-    const avgTime = combinedProjects.length ? (totalScripts / Math.max(1, combinedProjects.length) * 0.2 + 0.8).toFixed(1) : '0';
+    const totalGenerations = combinedProjects.reduce((acc, p) => acc + (p.generationCount || 0), 0);
     const activeCount = combinedProjects.filter(p => p.status === 'in_progress').length;
-    return { projectsCreated, testCaseCount, avgTime, activeCount };
+    return { projectsCreated, testCaseCount, totalGenerations, activeCount };
   }, [combinedProjects]);
 
   const filteredProjects = useMemo(() => {
     return combinedProjects.filter((item) => {
-      const matchesSearch = `${item.name} ${item.projectId || ''} ${item.workflowId} ${item.client || ''}`.toLowerCase().includes(query.toLowerCase());
+      const matchesSearch = `${item.name} ${item.application_url || ''} ${item.id}`.toLowerCase().includes(query.toLowerCase());
       const matchesStatus = statusFilter === 'all' ? true : item.status === statusFilter;
       return matchesSearch && matchesStatus;
     });
   }, [combinedProjects, query, statusFilter]);
 
-  const filteredIds = filteredProjects.map(p => p.workflowId);
+  const filteredIds = filteredProjects.map(p => p.id);
   const allVisibleSelected = filteredIds.length > 0 && filteredIds.every(id => selectedIds.has(id));
 
   return (
     <div className="space-y-8 pb-12">
-      {/* GREETING */}
-      <div>
-        <h1 className="text-3xl font-extrabold tracking-tight text-foreground md:text-4xl">
-          Hello, Yogeshwar
-        </h1>
-        <p className="mt-1.5 text-sm text-muted-foreground">
-          Welcome back to your workspace. Let&apos;s forge high-quality test suites &amp; automation scripts today.
-        </p>
+      {/* GREETING & HEADER */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-3xl font-extrabold tracking-tight text-foreground md:text-4xl">
+            Application Projects
+          </h1>
+          <p className="mt-1.5 text-sm text-muted-foreground">
+            Manage Applications Under Test, explore verified crawl knowledge, and orchestrate requirement generations.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setShowCreateModal(true)}
+            className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-xs font-bold text-primary-foreground shadow-md hover:opacity-90 transition"
+          >
+            <FolderKanban className="h-4 w-4" />
+            <span>+ Create Project</span>
+          </button>
+          <Link
+            href="/test-case-generation"
+            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-purple-600 px-4 py-2.5 text-xs font-bold text-white shadow-md shadow-orange-500/20 hover:opacity-95 transition"
+          >
+            <span>+ New Generation</span>
+          </Link>
+        </div>
       </div>
 
       {/* 4 STAT SUMMARY CARDS */}
@@ -256,11 +330,11 @@ function DashboardContent() {
         >
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Avg Processing Time</p>
-              <h3 className="mt-3 text-3xl font-extrabold text-foreground">{mounted ? `${liveStats.avgTime} min` : '0 min'}</h3>
+              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Requirement Generations</p>
+              <h3 className="mt-3 text-3xl font-extrabold text-foreground">{mounted ? liveStats.totalGenerations : 0}</h3>
               <div className="mt-2 inline-flex items-center gap-1 text-xs font-bold text-orange-600 dark:text-orange-400">
-                <span>↗ Real-time</span>
-                <span className="text-[10px] font-medium text-muted-foreground">avg duration</span>
+                <span>↗ Live Sync</span>
+                <span className="text-[10px] font-medium text-muted-foreground">total runs</span>
               </div>
             </div>
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-500/15 text-orange-600 dark:text-orange-400">
@@ -393,11 +467,11 @@ function DashboardContent() {
                         />
                       </th>
                     )}
-                    <th className="py-3 px-4">Name</th>
-                    <th className="py-3 px-4">Client / Domain</th>
+                    <th className="py-3 px-4">Application Project</th>
+                    <th className="py-3 px-4">Target Application URL</th>
+                    <th className="py-3 px-4">Crawl Knowledge</th>
+                    <th className="py-3 px-4">Generations</th>
                     <th className="py-3 px-4">Status</th>
-                    <th className="py-3 px-4">Test Cases</th>
-                    <th className="py-3 px-4 w-48">Progress</th>
                     <th className="py-3 px-4">Updated</th>
                     <th className="py-3 px-4 text-right">Actions</th>
                   </tr>
@@ -406,12 +480,12 @@ function DashboardContent() {
                   {filteredProjects.map((project) => {
                     const isDone = project.status === 'completed';
                     const isBlocked = project.status === 'blocked';
-                    const prog = project.progress || (isDone ? 100 : 50);
-                    const isSelected = selectedIds.has(project.workflowId);
+                    const isCrawled = project.crawlStatus === 'crawled';
+                    const isSelected = selectedIds.has(project.id);
 
                     return (
                       <tr
-                        key={project.workflowId}
+                        key={project.id}
                         className={`group hover:bg-muted/30 transition-colors ${isSelected ? 'bg-primary/5' : ''}`}
                       >
                         {/* Row checkbox */}
@@ -420,15 +494,15 @@ function DashboardContent() {
                             <input
                               type="checkbox"
                               checked={isSelected}
-                              onChange={() => toggleSelect(project.workflowId)}
+                              onChange={() => toggleSelect(project.id)}
                               className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
                             />
                           </td>
                         )}
                         <td className="py-3.5 px-4">
                           <Link
-                            onClick={() => setWorkflow(project.workflowId, project.projectId)}
-                            href={`/projects/${project.projectId || project.workflowId}`}
+                            onClick={() => setProject(project.id)}
+                            href={`/projects/${project.id}`}
                             className="flex items-center gap-2.5 font-bold text-foreground hover:text-primary transition"
                           >
                             <div className={`flex h-8 w-8 items-center justify-center rounded-lg transition-transform ${isSelected ? 'bg-primary/20 text-primary' : 'bg-orange-500/10 text-orange-500 group-hover:scale-105'}`}>
@@ -438,8 +512,27 @@ function DashboardContent() {
                           </Link>
                         </td>
 
-                        <td className="py-3.5 px-4 text-muted-foreground font-medium">
-                          {project.client || 'General Scope'}
+                        <td className="py-3.5 px-4 text-muted-foreground font-medium truncate max-w-[220px]">
+                          {project.application_url || <span className="italic text-muted-foreground/60">Not configured</span>}
+                        </td>
+
+                        <td className="py-3.5 px-4">
+                          <span
+                            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[10px] font-bold ${isCrawled
+                              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                              : 'bg-muted text-muted-foreground'
+                            }`}
+                          >
+                            <span className={`h-1.5 w-1.5 rounded-full ${isCrawled ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground'}`} />
+                            {isCrawled ? `${project.pagesCrawled} pages crawled` : 'Pending crawl'}
+                          </span>
+                        </td>
+
+                        <td className="py-3.5 px-4 font-bold text-foreground">
+                          <span className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 px-2.5 py-1 text-xs font-bold text-primary">
+                            <Layers className="h-3.5 w-3.5" />
+                            {project.generationCount} {project.generationCount === 1 ? 'Generation' : 'Generations'}
+                          </span>
                         </td>
 
                         <td className="py-3.5 px-4">
@@ -454,27 +547,6 @@ function DashboardContent() {
                             {isDone ? <CheckCircle2 className="h-3 w-3" /> : isBlocked ? <AlertTriangle className="h-3 w-3" /> : <Activity className="h-3 w-3" />}
                             {project.status.replaceAll('_', ' ')}
                           </span>
-                        </td>
-
-                        <td className="py-3.5 px-4 font-bold text-foreground">
-                          {project.testCaseCount || 0} Test Cases
-                        </td>
-
-                        <td className="py-3.5 px-4">
-                          <div className="flex items-center gap-3">
-                            <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                              <div
-                                className={`h-full rounded-full transition-all duration-500 ${isDone
-                                  ? 'bg-emerald-500'
-                                  : isBlocked
-                                    ? 'bg-rose-500'
-                                    : 'bg-gradient-to-r from-orange-500 to-purple-600'
-                                  }`}
-                                style={{ width: `${prog}%` }}
-                              />
-                            </div>
-                            <span className="w-9 text-right font-bold text-muted-foreground">{prog}%</span>
-                          </div>
                         </td>
 
                         <td className="py-3.5 px-4 text-muted-foreground">
@@ -494,9 +566,9 @@ function DashboardContent() {
                                   <Pencil className="h-3.5 w-3.5" />
                                 </button>
                                 <Link
-                                  onClick={() => setWorkflow(project.workflowId, project.projectId)}
-                                  href={`/projects/${project.projectId || project.workflowId}`}
-                                  className="inline-flex items-center gap-1 rounded-lg bg-primary/10 px-2.5 py-1.5 text-[11px] font-bold text-primary hover:bg-primary hover:text-primary-foreground transition"
+                                  onClick={() => setProject(project.id)}
+                                  href={`/projects/${project.id}`}
+                                  className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-bold text-primary-foreground shadow-sm hover:opacity-90 transition"
                                 >
                                   Workspace <ArrowRight className="h-3 w-3" />
                                 </Link>
@@ -505,7 +577,7 @@ function DashboardContent() {
 
                             <button
                               type="button"
-                              onClick={() => selectMode ? toggleSelect(project.workflowId) : handleDelete(project)}
+                              onClick={() => selectMode ? toggleSelect(project.id) : handleDelete(project)}
                               className={`p-1.5 rounded-lg transition-all ${selectMode
                                 ? isSelected
                                   ? 'text-primary bg-primary/10'
@@ -529,12 +601,12 @@ function DashboardContent() {
             <div className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
               {filteredProjects.map((project, index) => {
                 const complete = project.status === 'completed';
-                const prog = project.progress || (complete ? 100 : 50);
-                const isSelected = selectedIds.has(project.workflowId);
+                const isCrawled = project.crawlStatus === 'crawled';
+                const isSelected = selectedIds.has(project.id);
 
                 return (
                   <motion.article
-                    key={project.workflowId}
+                    key={project.id}
                     initial={{ opacity: 0, y: 12 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: index * 0.04 }}
@@ -550,7 +622,7 @@ function DashboardContent() {
                             <input
                               type="checkbox"
                               checked={isSelected}
-                              onChange={() => toggleSelect(project.workflowId)}
+                              onChange={() => toggleSelect(project.id)}
                               className="h-4 w-4 rounded border-border accent-primary cursor-pointer mt-0.5"
                             />
                           )}
@@ -570,37 +642,31 @@ function DashboardContent() {
                       <h3 className="mt-4 text-base font-bold text-foreground group-hover:text-primary transition">
                         {project.name}
                       </h3>
-                      <p className="mt-0.5 text-xs text-muted-foreground font-medium">
-                        {project.client || 'General Scope'}
+                      <p className="mt-0.5 text-xs text-muted-foreground font-medium truncate">
+                        {project.application_url || 'Target URL not configured'}
                       </p>
 
                       <div className="mt-4 grid grid-cols-3 gap-2 text-center">
                         <div className="rounded-xl bg-muted/40 p-2">
-                          <strong className="block text-sm font-bold">{project.scenarioCount || 0}</strong>
+                          <strong className="block text-sm font-bold text-primary">{project.generationCount}</strong>
+                          <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Generations</span>
+                        </div>
+                        <div className="rounded-xl bg-muted/40 p-2">
+                          <strong className="block text-sm font-bold">{project.scenarioCount}</strong>
                           <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Scenarios</span>
                         </div>
                         <div className="rounded-xl bg-muted/40 p-2">
-                          <strong className="block text-sm font-bold">{project.testCaseCount || 0}</strong>
+                          <strong className="block text-sm font-bold">{project.testCaseCount}</strong>
                           <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Test Cases</span>
-                        </div>
-                        <div className="rounded-xl bg-muted/40 p-2">
-                          <strong className="block text-sm font-bold">{project.scriptCount || 0}</strong>
-                          <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Scripts</span>
                         </div>
                       </div>
 
-                      {/* Animated Progress Bar */}
-                      <div className="mt-4 space-y-1.5">
-                        <div className="flex justify-between text-[11px] font-semibold">
-                          <span className="text-muted-foreground">Progress</span>
-                          <span className="text-primary">{prog}%</span>
-                        </div>
-                        <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                          <div
-                            className="h-full rounded-full bg-gradient-to-r from-orange-500 to-purple-600 transition-all duration-500"
-                            style={{ width: `${prog}%` }}
-                          />
-                        </div>
+                      {/* Crawl Knowledge pill */}
+                      <div className="mt-4 flex items-center justify-between rounded-xl border border-border/60 bg-muted/20 p-2.5 text-xs">
+                        <span className="text-[11px] font-semibold text-muted-foreground">Crawl Knowledge:</span>
+                        <span className={`text-[11px] font-bold ${isCrawled ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}`}>
+                          {isCrawled ? `${project.pagesCrawled} pages · ${project.elementsFound} elements` : 'Pending'}
+                        </span>
                       </div>
                     </div>
 
@@ -621,17 +687,17 @@ function DashboardContent() {
                               <Pencil className="h-3.5 w-3.5" />
                             </button>
                             <Link
-                              onClick={() => setWorkflow(project.workflowId, project.projectId)}
-                              href={`/projects/${project.projectId || project.workflowId}`}
+                              onClick={() => setProject(project.id)}
+                              href={`/projects/${project.id}`}
                               className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-bold text-primary-foreground shadow-sm hover:opacity-90 transition"
                             >
-                              Workspace <ArrowRight className="h-3.5 w-3.5" />
+                              Workspace <ArrowRight className="h-3 w-3" />
                             </Link>
                           </>
                         )}
                         <button
                           type="button"
-                          onClick={() => selectMode ? toggleSelect(project.workflowId) : handleDelete(project)}
+                          onClick={() => selectMode ? toggleSelect(project.id) : handleDelete(project)}
                           className={`p-1.5 rounded-lg transition-all ${selectMode
                             ? isSelected
                               ? 'text-primary bg-primary/10'
@@ -652,10 +718,18 @@ function DashboardContent() {
         ) : (
           <div className="mt-6 flex min-h-60 flex-col items-center justify-center rounded-2xl border border-dashed border-border/80 bg-card/40 p-8 text-center">
             <FolderSearch className="h-10 w-10 text-primary mb-2" />
-            <h3 className="text-base font-bold">No test projects found</h3>
+            <h3 className="text-base font-bold">No application projects found</h3>
             <p className="mt-1 text-xs text-muted-foreground max-w-sm">
-              No projects yet. Use the sidebar to create a new AI generation project.
+              Create a new Application Under Test project to start managing requirement generations and test suites.
             </p>
+            <button
+              type="button"
+              onClick={() => setShowCreateModal(true)}
+              className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-bold text-primary-foreground shadow transition hover:opacity-90"
+            >
+              <FolderKanban className="h-4 w-4" />
+              <span>Create Application Project</span>
+            </button>
           </div>
         )}
       </section>
@@ -748,6 +822,85 @@ function DashboardContent() {
                   Save Name
                 </button>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* CREATE APPLICATION PROJECT MODAL */}
+      <AnimatePresence>
+        {showCreateModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-2xl space-y-4"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                    <FolderKanban className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-foreground">Create Application Project</h3>
+                    <p className="text-xs text-muted-foreground">Register an Application Under Test workspace</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowCreateModal(false)}
+                  className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted transition"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleCreateProject} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-muted-foreground mb-1.5">
+                    Project Name *
+                  </label>
+                  <input
+                    type="text"
+                    value={createProjectName}
+                    onChange={(e) => setCreateProjectName(e.target.value)}
+                    placeholder="e.g. Core Web Platform"
+                    className="w-full rounded-xl border border-input bg-background p-3 text-sm font-semibold outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition"
+                    required
+                    autoFocus
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-muted-foreground mb-1.5">
+                    Application URL (Optional)
+                  </label>
+                  <input
+                    type="url"
+                    value={createAppUrl}
+                    onChange={(e) => setCreateAppUrl(e.target.value)}
+                    placeholder="https://example.com"
+                    className="w-full rounded-xl border border-input bg-background p-3 text-sm font-semibold outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowCreateModal(false)}
+                    className="rounded-xl border border-border bg-background px-4 py-2 text-xs font-bold text-muted-foreground hover:bg-muted transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={!createProjectName.trim() || createLoading}
+                    className="rounded-xl bg-primary px-4 py-2 text-xs font-bold text-primary-foreground shadow-md hover:opacity-90 disabled:opacity-50 transition"
+                  >
+                    {createLoading ? 'Creating…' : 'Create Project'}
+                  </button>
+                </div>
+              </form>
             </motion.div>
           </div>
         )}

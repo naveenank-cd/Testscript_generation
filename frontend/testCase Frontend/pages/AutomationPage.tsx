@@ -385,15 +385,28 @@ export function AutomationPage() {
             <h1 className="mt-1 text-2xl font-bold">{historyMode ? 'Saved scripts and execution results' : 'Generate and execute test scripts'}</h1>
             <p className="mt-1 text-sm text-muted-foreground">{historyMode ? 'Read-only output from the previously completed run. This view cannot start a crawl or execution.' : 'Playwright remains the primary engine. Optional Seacrawl recovery is limited to failed locator actions.'}</p>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              window.location.href = '/test-case-generation/input';
-            }}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground shadow transition hover:bg-primary/90 self-start sm:self-auto"
-          >
-            + Add Another Generation
-          </button>
+          <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+            {projectId && (
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.href = `/projects/${projectId}`;
+                }}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-sm font-semibold hover:bg-muted transition"
+              >
+                Project Workspace
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                window.location.href = projectId ? `/test-case-generation?projectId=${projectId}` : '/test-case-generation';
+              }}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground shadow transition hover:bg-primary/90"
+            >
+              + Add Another Generation
+            </button>
+          </div>
         </div>
       </div>
 
@@ -418,7 +431,7 @@ export function AutomationPage() {
                     window.sessionStorage.setItem('activeProjectName', val);
                   }
                 }}
-                placeholder="e.g. Swag Labs E2E Test Suite"
+                placeholder="e.g. Enterprise Portal E2E Test Suite"
                 className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
               />
             </div>

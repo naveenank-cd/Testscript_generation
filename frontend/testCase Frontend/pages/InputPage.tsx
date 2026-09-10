@@ -1,13 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Image from 'next/image';
-import { ArrowRight, FileText, FolderKanban, ImagePlus, LoaderCircle, Plus, Sparkles, Trash2, UploadCloud, X } from 'lucide-react';
+import { ArrowRight, FileText, FolderKanban, ImagePlus, LoaderCircle, Plus, Sparkles, Trash2, UploadCloud, X, Layers, Globe } from 'lucide-react';
 import { DynamicListField } from '../components/DynamicListField';
 import { ConfidenceRing } from '../components/TraceabilityUI';
 import { EMPTY_PAYLOAD, FIELD_LABELS } from '../constants';
 import { testCaseApi } from '../services/testCaseApi';
+import { projectService } from '@/services/projectService';
 import { loadActiveProjectName, useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { DocumentSession, ManualInputPayload, ParsedDocumentStory } from '../types';
 import { cleanPayload, friendlyError } from '../utils';
@@ -18,8 +19,14 @@ const DOCUMENT_MAX_SIZE_MB = Number(process.env.NEXT_PUBLIC_DOCUMENT_MAX_SIZE_MB
 
 export function InputPage() {
   const router = useRouter();
-  const { projectId, hydrate, setWorkflow } = useTestCaseWorkflowStore();
-  const [projectName, setProjectName] = useState(loadActiveProjectName);
+  const searchParams = useSearchParams();
+  const urlProjectId = searchParams.get('projectId');
+
+  const { projectId: storeProjectId, setProject, hydrate, setWorkflow } = useTestCaseWorkflowStore();
+  const activeProjectId = urlProjectId || storeProjectId;
+
+  const [projectName, setProjectName] = useState(() => loadActiveProjectName());
+  const [projectAppUrl, setProjectAppUrl] = useState('');
   const [payload, setPayload] = useState<ManualInputPayload>(() => structuredClone(EMPTY_PAYLOAD));
   const [submitting, setSubmitting] = useState(false);
   const [mockMode, setMockMode] = useState(false);
@@ -46,15 +53,29 @@ export function InputPage() {
   useEffect(() => hydrate(), [hydrate]);
 
   useEffect(() => {
-    if (projectId) {
-      testCaseApi.getProjectCrawlKnowledge(projectId).then((k) => {
+    if (urlProjectId) {
+      setProject(urlProjectId);
+    }
+  }, [urlProjectId, setProject]);
+
+  useEffect(() => {
+    if (activeProjectId) {
+      projectService.getProject(activeProjectId).then((p) => {
+        if (p) {
+          if (p.name) setProjectName(p.name);
+          if (p.application_url) setProjectAppUrl(p.application_url);
+        }
+      }).catch(() => undefined);
+
+      testCaseApi.getProjectCrawlKnowledge(activeProjectId).then((k) => {
         if (k) setProjectCrawlKnowledge(k);
       }).catch(() => undefined);
-      testCaseApi.getProjectGenerations(projectId).then((gens) => {
+
+      projectService.getGenerations(activeProjectId).then((gens) => {
         if (gens && Array.isArray(gens)) setProjectGenerations(gens);
       }).catch(() => undefined);
     }
-  }, [projectId]);
+  }, [activeProjectId]);
 
   const updateList = (key: Exclude<keyof ManualInputPayload, 'tech_stack'>, values: string[]) =>
     setPayload((current) => ({ ...current, [key]: values }));
@@ -153,9 +174,9 @@ export function InputPage() {
         await testCaseApi.updateDocumentSession(documentSession.session_id, documentStories);
       }
       const response = await testCaseApi.startWorkflow(documentSession
-        ? { project_id: projectId || undefined, project_name: projectName.trim() || undefined, source_type: 'manual', document_session_id: documentSession.session_id, mock_mode: mockMode, confidence_threshold: confidenceThreshold / 100 }
-        : { project_id: projectId || undefined, project_name: projectName.trim() || undefined, source_type: 'manual', input_payload: cleaned, mock_mode: mockMode, confidence_threshold: confidenceThreshold / 100 });
-      setWorkflow(response.workflow_id, response.project_id, projectName.trim() || undefined);
+        ? { project_id: activeProjectId || undefined, project_name: projectName.trim() || undefined, source_type: 'manual', document_session_id: documentSession.session_id, mock_mode: mockMode, confidence_threshold: confidenceThreshold / 100 }
+        : { project_id: activeProjectId || undefined, project_name: projectName.trim() || undefined, source_type: 'manual', input_payload: cleaned, mock_mode: mockMode, confidence_threshold: confidenceThreshold / 100 });
+      setWorkflow(response.workflow_id, response.project_id || activeProjectId || null, projectName.trim() || undefined);
       router.push('/test-case-generation/progress');
     } catch (requestError) {
       setError(friendlyError(requestError));
@@ -166,15 +187,39 @@ export function InputPage() {
 
   return (
     <div className="space-y-6">
+      {/* Back to Project / Dashboard Breadcrumb */}
+      {activeProjectId && (
+        <div className="flex items-center justify-between">
+          <button
+            type="button"
+            onClick={() => router.push(`/projects/${activeProjectId}`)}
+            className="inline-flex items-center gap-2 text-xs font-bold text-muted-foreground hover:text-primary transition"
+          >
+            <ArrowRight className="h-3.5 w-3.5 rotate-180" /> Back to Project Workspace
+          </button>
+          <span className="text-xs font-bold text-primary">
+            Adding Requirement Generation {projectGenerations.length + 1}
+          </span>
+        </div>
+      )}
+
       <div className="relative flex min-h-[56vh] overflow-hidden rounded-[2rem] border border-primary/20 bg-gradient-to-br from-primary/15 via-card/90 to-card p-6 shadow-2xl shadow-primary/10 sm:p-10 lg:p-14">
         <div className="absolute -right-24 -top-24 h-80 w-80 rounded-full border border-primary/20 bg-primary/5 shadow-[0_0_100px_rgba(14,165,233,.16)]" aria-hidden="true" />
         <div className="absolute bottom-10 right-10 hidden grid-cols-3 gap-3 lg:grid" aria-hidden="true">{Array.from({ length: 9 }).map((_, index) => <span key={index} className="h-2 w-2 rounded-full bg-primary/30" />)}</div>
         <div className="relative z-10 flex max-w-5xl items-start gap-4 self-center">
           <div className="rounded-xl bg-primary p-3 text-primary-foreground shadow-xl shadow-primary/30"><Sparkles className="h-6 w-6" /></div>
           <div className="min-w-0">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">AI workflow</p>
-            <h1 className="mt-4 font-bold">Turn product intent into executable confidence.</h1>
-            <p className="mt-6 max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">Provide user stories and acceptance criteria to generate test scenarios, traceable test cases, and production-ready automation evidence.</p>
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">
+              {activeProjectId ? 'Project Requirement Generation' : 'AI Workflow'}
+            </p>
+            <h1 className="mt-4 font-bold">
+              {activeProjectId ? `Create New Generation for ${projectName || 'Project'}` : 'Turn product intent into executable confidence.'}
+            </h1>
+            <p className="mt-6 max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">
+              {activeProjectId
+                ? 'Provide new user stories and acceptance criteria. Existing crawl knowledge and prior generations are safely preserved.'
+                : 'Provide user stories and acceptance criteria to generate test scenarios, traceable test cases, and production-ready automation evidence.'}
+            </p>
             <div className="mt-8 flex flex-wrap gap-3 text-xs font-bold uppercase tracking-wider text-muted-foreground"><span>01 · Define</span><span className="text-primary">→</span><span>02 · Generate</span><span className="text-primary">→</span><span>03 · Validate</span><span className="text-primary">→</span><span>04 · Automate</span></div>
           </div>
         </div>
@@ -183,6 +228,30 @@ export function InputPage() {
       <form onSubmit={submit} className="space-y-6">
         {error && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-600 dark:text-red-300">{error}</div>}
         
+        {/* Active Project Scoping Banner */}
+        {activeProjectId && (
+          <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/15 text-primary font-bold">
+                  <Layers className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-foreground">
+                    Adding Generation to: {projectName || `Project ${activeProjectId.slice(0, 8)}`}
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Project ID: {activeProjectId} {projectAppUrl ? `· Target URL: ${projectAppUrl}` : ''}
+                  </p>
+                </div>
+              </div>
+              <span className="rounded-md bg-primary/20 px-2.5 py-1 text-xs font-semibold text-primary self-start sm:self-auto">
+                Multi-Generation Workspace
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Saved Project Crawl Knowledge Banner */}
         {projectCrawlKnowledge && (
           <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-5 shadow-sm">
@@ -194,7 +263,7 @@ export function InputPage() {
                     Reusing Saved Application Knowledge
                   </h3>
                   <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-0.5">
-                    {projectCrawlKnowledge.application_url} · {projectCrawlKnowledge.pages_crawled || projectCrawlKnowledge.application_map?.pages?.length || 0} pages · {projectCrawlKnowledge.elements_found || projectCrawlKnowledge.discovered_elements?.length || 0} verified elements discovered
+                    {projectCrawlKnowledge.application_url || projectAppUrl} · {projectCrawlKnowledge.pages_crawled || projectCrawlKnowledge.application_map?.pages?.length || 0} pages · {projectCrawlKnowledge.elements_found || projectCrawlKnowledge.discovered_elements?.length || 0} verified elements discovered
                   </p>
                 </div>
               </div>
@@ -241,7 +310,7 @@ export function InputPage() {
             type="text"
             value={projectName}
             onChange={(e) => setProjectName(e.target.value)}
-            placeholder="e.g., E-Commerce Checkout & Payment Gateway Test Suite"
+            placeholder="e.g., Enterprise Portal & Admin Suite"
             className="w-full rounded-xl border border-input bg-background p-3.5 text-sm font-semibold outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition placeholder:text-muted-foreground/60"
           />
         </section>
@@ -350,7 +419,7 @@ export function InputPage() {
                           current.map((item, idx) => (idx === storyIdx ? { ...item, text: val } : item))
                         );
                       }}
-                      placeholder="e.g., As a Caregiver Admin, I want to review conflicting appointments so that overlapping schedules are prevented."
+                      placeholder="e.g., As an Administrator, I want to configure user permissions so that unauthorized access is prevented."
                       rows={2}
                       className="mt-1 w-full rounded-lg border border-input bg-card p-3 text-sm outline-none focus:border-primary transition"
                     />
@@ -398,7 +467,7 @@ export function InputPage() {
                               )
                             );
                           }}
-                          placeholder={`Acceptance Criterion ${acIdx + 1} (e.g. Show Caregiver Conflict when travel time is insufficient)`}
+                          placeholder={`Acceptance Criterion ${acIdx + 1} (e.g. Display validation warning when required fields are missing)`}
                           rows={1}
                           className="min-h-12 flex-1 rounded-lg border border-input bg-card p-2.5 text-sm outline-none focus:border-primary transition"
                         />

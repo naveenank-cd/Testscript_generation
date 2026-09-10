@@ -36,6 +36,13 @@ export const projectService = {
       return null;
     }
   },
+  getGenerations: async (id: string): Promise<any[]> => {
+    try {
+      return await apiClient.get(`/api/v1/projects/${id}/generations`);
+    } catch {
+      return [];
+    }
+  },
   createProject: async (data: { name: string; description?: string; application_url?: string; auth_config?: any }) => {
     return await apiClient.post('/api/v1/projects', data);
   },

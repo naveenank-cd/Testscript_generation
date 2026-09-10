@@ -6,12 +6,38 @@ import { WORKFLOW_SNAPSHOT_KEY, WORKFLOW_STORAGE_KEY } from '../constants';
 
 import { setActiveProjectId } from '../utils';
 
+export interface GenerationSummary {
+  workflow_id: string;
+  project_id: string;
+  project_name?: string;
+  status: string;
+  current_stage: string;
+  started_at?: string;
+  completed_at?: string;
+  user_story_count: number;
+  acceptance_criteria_count: number;
+  scenario_count: number;
+  test_case_count: number;
+  script_count?: number;
+  user_stories?: string[];
+  acceptance_criteria?: string[];
+  scenarios?: any[];
+  test_cases?: any[];
+  crawl_id?: string | null;
+}
+
 interface WorkflowStore {
-  workflowId: string | null;
+  selectedProjectId: string | null;
+  selectedWorkflowId: string | null;
   projectId: string | null;
+  workflowId: string | null;
   snapshot: WorkflowEvent | null;
   result: WorkflowResult | null;
   projects: TestProjectRecord[];
+  generations: GenerationSummary[];
+  setProject: (projectId: string | null) => void;
+  selectGeneration: (workflowId: string | null) => void;
+  setGenerations: (generations: GenerationSummary[]) => void;
   setWorkflow: (workflowId: string, projectId?: string | null, projectName?: string) => void;
   setProjectId: (projectId: string | null) => void;
   setSnapshot: (snapshot: WorkflowEvent) => void;
@@ -43,11 +69,16 @@ const readProjects = (): TestProjectRecord[] => {
 };
 const saveProjects = (projects: TestProjectRecord[]) => localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
 
-export function loadActiveProjectName(): string {
+export function loadActiveProjectName(workflowId?: string): string {
   try {
+    if (typeof window !== 'undefined') {
+      const storedName = window.localStorage.getItem('activeProjectName');
+      if (storedName && storedName.trim()) return storedName.trim();
+    }
     const active = JSON.parse(sessionStorage.getItem(WORKFLOW_STORAGE_KEY) ?? 'null') as { workflowId?: string } | null;
-    if (!active?.workflowId) return '';
-    return readProjects().find((project) => project.workflowId === active.workflowId)?.name ?? '';
+    const targetWfId = workflowId || active?.workflowId;
+    if (!targetWfId) return '';
+    return readProjects().find((project) => project.workflowId === targetWfId)?.name ?? '';
   } catch {
     return '';
   }
@@ -74,13 +105,14 @@ export function loadTestProjectArtifacts(workflowId: string): SavedTestProjectAr
 export function saveTestProjectArtifacts(workflowId: string, generation?: ScriptGeneration | null, report?: ExecutionReport | null, comparison?: TraceabilityComparisonReport | null, crawl?: CrawlAnalysis | null) {
   const projects = readProjects();
   const index = projects.findIndex((item) => item.workflowId === workflowId);
-  if (index < 0) return;
-  projects[index] = {
-    ...projects[index], updatedAt: new Date().toISOString(),
-    scriptCount: generation?.scripts.length ?? projects[index].scriptCount,
-    execution: report ? { executionId: report.execution_id, passed: report.passed_scripts, failed: report.failed_scripts, total: report.total_scripts, successPercentage: report.success_percentage } : projects[index].execution,
-  };
-  saveProjects(projects);
+  if (index >= 0) {
+    projects[index] = {
+      ...projects[index], updatedAt: new Date().toISOString(),
+      scriptCount: generation?.scripts.length ?? projects[index].scriptCount,
+      execution: report ? { executionId: report.execution_id, passed: report.passed_scripts, failed: report.failed_scripts, total: report.total_scripts, successPercentage: report.success_percentage } : projects[index].execution,
+    };
+    saveProjects(projects);
+  }
   try {
     const saved = loadTestProjectArtifacts(workflowId) ?? {};
     localStorage.setItem(artifactsKey(workflowId), JSON.stringify({ ...saved, generation: generation ?? saved.generation, report: report ?? saved.report, comparison: comparison ?? saved.comparison, crawl: crawl ?? saved.crawl }));
@@ -107,11 +139,33 @@ export function saveAutomationActivity(
 }
 
 export const useTestCaseWorkflowStore = create<WorkflowStore>((set) => ({
+  selectedProjectId: null,
+  selectedWorkflowId: null,
   workflowId: null,
   projectId: null,
   snapshot: null,
   result: null,
   projects: [],
+  generations: [],
+  setProject: (projectId: string | null) => {
+    try {
+      const active = JSON.parse(sessionStorage.getItem(WORKFLOW_STORAGE_KEY) ?? '{}');
+      sessionStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify({ ...active, projectId }));
+    } catch {}
+    if (projectId) setActiveProjectId(projectId);
+    set({ selectedProjectId: projectId, projectId });
+  },
+  selectGeneration: (workflowId: string | null) => {
+    try {
+      const active = JSON.parse(sessionStorage.getItem(WORKFLOW_STORAGE_KEY) ?? '{}');
+      sessionStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify({ ...active, workflowId }));
+    } catch {}
+    if (workflowId) setActiveProjectId(workflowId);
+    set({ selectedWorkflowId: workflowId, workflowId });
+  },
+  setGenerations: (generations: GenerationSummary[]) => {
+    set({ generations });
+  },
   setWorkflow: (workflowId, projectId = null, projectName?: string) => {
     sessionStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify({ workflowId, projectId }));
     setActiveProjectId(workflowId);
@@ -132,7 +186,13 @@ export const useTestCaseWorkflowStore = create<WorkflowStore>((set) => ({
         window.localStorage.setItem('activeProjectName', projectName.trim());
       }
     }
-    set({ workflowId, projectId, projects });
+    set({
+      selectedWorkflowId: workflowId,
+      selectedProjectId: projectId,
+      workflowId,
+      projectId,
+      projects,
+    });
   },
   setProjectId: (projectId: string | null) => {
     try {
@@ -140,7 +200,7 @@ export const useTestCaseWorkflowStore = create<WorkflowStore>((set) => ({
       sessionStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify({ ...active, projectId }));
     } catch {}
     if (projectId) setActiveProjectId(projectId);
-    set({ projectId });
+    set({ selectedProjectId: projectId, projectId });
   },
   setSnapshot: (snapshot) => {
     sessionStorage.setItem(WORKFLOW_SNAPSHOT_KEY, JSON.stringify(snapshot));
@@ -180,7 +240,7 @@ export const useTestCaseWorkflowStore = create<WorkflowStore>((set) => ({
       sessionStorage.removeItem(WORKFLOW_SNAPSHOT_KEY);
     }
     set((state) => state.workflowId === workflowId
-      ? { projects, workflowId: null, projectId: null, snapshot: null, result: null }
+      ? { projects, workflowId: null, selectedWorkflowId: null, snapshot: null, result: null }
       : { projects });
   },
   hydrate: () => {
@@ -199,7 +259,14 @@ export const useTestCaseWorkflowStore = create<WorkflowStore>((set) => ({
           saveProjects(projects);
         }
       }
-      set({ workflowId: active?.workflowId ?? null, projectId: active?.projectId ?? null, snapshot, projects });
+      set({
+        selectedWorkflowId: active?.workflowId ?? null,
+        selectedProjectId: active?.projectId ?? null,
+        workflowId: active?.workflowId ?? null,
+        projectId: active?.projectId ?? null,
+        snapshot,
+        projects,
+      });
     } catch {
       sessionStorage.removeItem(WORKFLOW_STORAGE_KEY);
       sessionStorage.removeItem(WORKFLOW_SNAPSHOT_KEY);
@@ -209,6 +276,14 @@ export const useTestCaseWorkflowStore = create<WorkflowStore>((set) => ({
     sessionStorage.removeItem(WORKFLOW_STORAGE_KEY);
     sessionStorage.removeItem(WORKFLOW_SNAPSHOT_KEY);
     setActiveProjectId('default');
-    set({ workflowId: null, projectId: null, snapshot: null, result: null });
+    set({
+      selectedWorkflowId: null,
+      selectedProjectId: null,
+      workflowId: null,
+      projectId: null,
+      snapshot: null,
+      result: null,
+      generations: [],
+    });
   },
 }));

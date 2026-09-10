@@ -329,7 +329,7 @@ def map_test_case_steps_to_crawl_evidence(
                 case_unsupported_reasons.append(f"Step {step_num}: No crawl knowledge available for '{action}'")
             else:
                 # 1. Check if navigation step
-                is_nav = any(verb in action_lower for verb in ("navigate", "open", "go to", "visit"))
+                is_nav = any(verb in action_lower for verb in ("navigate", "open", "go to", "visit", "launch"))
                 if is_nav:
                     matched_page = None
                     for p in discovered_pages:
@@ -340,13 +340,19 @@ def map_test_case_steps_to_crawl_evidence(
                             matched_page = p
                             break
                     if not matched_page:
-                        if any(k in action_lower for k in ("login", "signin", "sign in")):
-                            matched_page = next((p for p in discovered_pages if any(k in str(p.get("url", "")).lower() or k in str(p.get("title", "")).lower() for k in ("login", "signin"))), None)
-                        elif any(k in action_lower for k in ("inventory", "catalog", "products")):
-                            matched_page = next((p for p in discovered_pages if any(k in str(p.get("url", "")).lower() or k in str(p.get("title", "")).lower() for k in ("inventory", "catalog", "product"))), None)
-                        elif any(k in action_lower for k in ("cart", "checkout")):
-                            matched_page = next((p for p in discovered_pages if any(k in str(p.get("url", "")).lower() or k in str(p.get("title", "")).lower() for k in ("cart", "checkout"))), None)
-                        elif any(k in action_lower for k in ("base", "home", "portal", "application", "dashboard")):
+                        # Dynamic token overlap matching between navigation action and discovered pages
+                        action_tokens = _meaningful_tokens(action)
+                        best_overlap = 0
+                        for p in discovered_pages:
+                            p_url = str(p.get("url") or "")
+                            p_title = str(p.get("title") or "")
+                            p_tokens = _meaningful_tokens(p_url + " " + p_title)
+                            overlap = len(action_tokens & p_tokens)
+                            if overlap > best_overlap:
+                                best_overlap = overlap
+                                matched_page = p
+                    if not matched_page:
+                        if any(k in action_lower for k in ("base", "home", "portal", "application", "dashboard", "root", "start")):
                             matched_page = next((p for p in discovered_pages if _normalize_path(str(p.get("url", ""))) == _normalize_path(root_url)), None)
 
                     target_url = str(matched_page.get("url")) if matched_page else root_url

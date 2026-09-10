@@ -15,7 +15,7 @@ type Tab = 'scenarios' | 'testCases' | 'validation' | 'traceability';
 
 export function ResultsPage() {
   const router = useRouter();
-  const { workflowId, result, hydrate, setResult, clear } = useTestCaseWorkflowStore();
+  const { projectId, workflowId, result, hydrate, setResult, clear } = useTestCaseWorkflowStore();
   const [data, setData] = useState<WorkflowResult | null>(result);
   const [loading, setLoading] = useState(!result);
   const [error, setError] = useState('');
@@ -60,8 +60,12 @@ export function ResultsPage() {
     window.setTimeout(() => setCopied(''), 1500);
   };
   const startAnother = () => {
-    clear();
-    router.push('/test-case-generation');
+    if (projectId) {
+      router.push(`/test-case-generation?projectId=${projectId}`);
+    } else {
+      clear();
+      router.push('/test-case-generation');
+    }
   };
   const regenerate = async () => {
     const feedback = improvements.trim();
@@ -167,9 +171,17 @@ export function ResultsPage() {
           <p className="mt-1 text-sm text-muted-foreground">Review generated assets and their threshold-based validation results.</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {projectId && (
+            <button
+              onClick={() => router.push(`/projects/${projectId}`)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3.5 py-2 text-sm font-semibold hover:bg-muted transition"
+            >
+              Workspace
+            </button>
+          )}
           <button onClick={() => router.push('/test-case-generation/automation')} className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700">Proceed to Test Scripts</button>
           <button onClick={() => downloadFile(`testcase-results-${activeWorkflowId}.json`, JSON.stringify(data, null, 2), 'application/json')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold hover:bg-muted"><Download className="h-4 w-4" /> Export JSON</button>
-          <button onClick={startAnother} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">Start another generation</button>
+          <button onClick={startAnother} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">+ New Generation</button>
         </div>
       </div>
 
