@@ -52,6 +52,12 @@ class WorkflowService:
                 crawl_knowledge=project.crawl_knowledge
         except Exception:
             if not project_id: project_id=uuid.uuid4()
+        if not crawl_knowledge and project_id:
+            try:
+                from app.services.automation_service import automation_service
+                crawl_knowledge = await automation_service.get_project_crawl_knowledge(project_id)
+            except Exception:
+                pass
         if request.document_session_id:
             payload=(await document_service.get(request.document_session_id))["input_payload"]
         else:

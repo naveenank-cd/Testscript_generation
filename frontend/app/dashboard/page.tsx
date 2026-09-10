@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState, Suspense } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Activity,
@@ -62,6 +62,7 @@ type ProjectRow = {
 };
 
 function DashboardContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const initialQuery = searchParams.get('q') || '';
 
@@ -70,6 +71,7 @@ function DashboardContent() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'in_progress' | 'completed' | 'blocked'>('all');
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('table');
   const [mounted, setMounted] = useState(false);
+  const [loadingProjects, setLoadingProjects] = useState(true);
   const [backendProjects, setBackendProjects] = useState<BackendProject[]>([]);
   const [projectGenerationsMap, setProjectGenerationsMap] = useState<Record<string, any[]>>({});
 
@@ -111,10 +113,13 @@ function DashboardContent() {
         application_url: createAppUrl.trim() || undefined,
       });
       if (created && (created as any).id) {
+        const newId = (created as any).id;
         setBackendProjects(prev => [created as any, ...prev]);
         setShowCreateModal(false);
         setCreateProjectName('');
         setCreateAppUrl('');
+        // Navigate directly to the new project workspace
+        router.push(`/projects/${newId}`);
       }
     } catch {
       // Error handled gracefully
@@ -125,28 +130,38 @@ function DashboardContent() {
 
   useEffect(() => {
     setMounted(true);
+    useTestCaseWorkflowStore.getState().clearSelection();
+    setLoadingProjects(true);
     projectService.getProjects()
-      .then(async (data) => {
+      .then((data) => {
         if (Array.isArray(data)) {
           setBackendProjects(data);
-          // Load generations for each project in parallel
-          const gensMap: Record<string, any[]> = {};
-          await Promise.all(
+          // Immediately display the projects table without waiting for generations queries
+          setLoadingProjects(false);
+          // Load generations asynchronously in background
+          Promise.all(
             data.map(async (p) => {
               try {
                 const gens = await projectService.getGenerations(p.id);
-                if (Array.isArray(gens)) {
-                  gensMap[p.id] = gens;
-                }
+                return { id: p.id, gens: Array.isArray(gens) ? gens : [] };
               } catch {
-                gensMap[p.id] = [];
+                return { id: p.id, gens: [] };
               }
             })
-          );
-          setProjectGenerationsMap(gensMap);
+          ).then((results) => {
+            const gensMap: Record<string, any[]> = {};
+            results.forEach(({ id, gens }) => {
+              gensMap[id] = gens;
+            });
+            setProjectGenerationsMap(gensMap);
+          });
+        } else {
+          setLoadingProjects(false);
         }
       })
-      .catch(() => undefined);
+      .catch(() => {
+        setLoadingProjects(false);
+      });
   }, []);
 
   useEffect(() => hydrate(), [hydrate]);
@@ -448,8 +463,14 @@ function DashboardContent() {
           </div>
         </div>
 
-        {/* PROJECTS DISPLAY (TABLE OR GRID) */}
-        {filteredProjects.length ? (
+        {/* PROJECTS DISPLAY (LOADING SKELETON, TABLE, OR GRID) */}
+        {loadingProjects ? (
+          <div className="mt-6 space-y-3">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="h-16 w-full animate-pulse rounded-2xl bg-muted/40 border border-border/40" />
+            ))}
+          </div>
+        ) : filteredProjects.length ? (
           viewMode === 'table' ? (
             <div className="mt-4 overflow-x-auto">
               <table className="w-full text-left text-xs">
@@ -468,7 +489,7 @@ function DashboardContent() {
                       </th>
                     )}
                     <th className="py-3 px-4">Application Project</th>
-                    <th className="py-3 px-4">Target Application URL</th>
+                    <th className="py-3 px-4">Target Application Web Address</th>
                     <th className="py-3 px-4">Crawl Knowledge</th>
                     <th className="py-3 px-4">Generations</th>
                     <th className="py-3 px-4">Status</th>

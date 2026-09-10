@@ -17,15 +17,31 @@ const VISIBLE_INPUT_FIELDS = ['user_stories', 'acceptance_criteria'] as const;
 const IMAGE_MAX_SIZE_MB = Number(process.env.NEXT_PUBLIC_IMAGE_MAX_SIZE_MB ?? 10);
 const DOCUMENT_MAX_SIZE_MB = Number(process.env.NEXT_PUBLIC_DOCUMENT_MAX_SIZE_MB ?? 10);
 
+function parseAcceptanceCriteria(raw: string): string[] {
+  if (!raw || !raw.trim()) return [];
+  const lines = raw.split(/\r?\n/);
+  const criteria: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    // Strip common numbering, bullet point, or checkbox prefixes
+    const cleaned = trimmed.replace(/^(\d+[\.\)]\s*|[-*•]\s*|\[[\sxX]?\]\s*)/, '').trim();
+    if (cleaned) {
+      criteria.push(cleaned);
+    }
+  }
+  return criteria;
+}
+
 export function InputPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const urlProjectId = searchParams.get('projectId');
 
-  const { projectId: storeProjectId, setProject, hydrate, setWorkflow } = useTestCaseWorkflowStore();
-  const activeProjectId = urlProjectId || storeProjectId;
+  const { setProject, hydrate, setWorkflow } = useTestCaseWorkflowStore();
+  const activeProjectId = urlProjectId || null;
 
-  const [projectName, setProjectName] = useState(() => loadActiveProjectName());
+  const [projectName, setProjectName] = useState('');
   const [projectAppUrl, setProjectAppUrl] = useState('');
   const [payload, setPayload] = useState<ManualInputPayload>(() => structuredClone(EMPTY_PAYLOAD));
   const [submitting, setSubmitting] = useState(false);
@@ -43,9 +59,9 @@ export function InputPage() {
   const [documentLoading, setDocumentLoading] = useState(false);
   const [documentError, setDocumentError] = useState('');
 
-  // Structured dynamic user stories (each with its own acceptance criteria list)
-  const [structuredStories, setStructuredStories] = useState<Array<{ id: string; text: string; acceptance_criteria: string[] }>>([
-    { id: '1', text: '', acceptance_criteria: [''] },
+  // Structured dynamic user stories (each with its own single acceptance criteria textarea)
+  const [structuredStories, setStructuredStories] = useState<Array<{ id: string; text: string; criteriaText: string }>>([
+    { id: '1', text: '', criteriaText: '' },
   ]);
   const [projectCrawlKnowledge, setProjectCrawlKnowledge] = useState<any>(null);
   const [projectGenerations, setProjectGenerations] = useState<any[]>([]);
@@ -53,29 +69,27 @@ export function InputPage() {
   useEffect(() => hydrate(), [hydrate]);
 
   useEffect(() => {
-    if (urlProjectId) {
-      setProject(urlProjectId);
+    if (!activeProjectId) {
+      router.replace('/dashboard');
+      return;
     }
-  }, [urlProjectId, setProject]);
 
-  useEffect(() => {
-    if (activeProjectId) {
-      projectService.getProject(activeProjectId).then((p) => {
-        if (p) {
-          if (p.name) setProjectName(p.name);
-          if (p.application_url) setProjectAppUrl(p.application_url);
-        }
-      }).catch(() => undefined);
+    setProject(activeProjectId);
+    projectService.getProject(activeProjectId).then((p) => {
+      if (p) {
+        if (p.name) setProjectName(p.name);
+        if (p.application_url) setProjectAppUrl(p.application_url);
+      }
+    }).catch(() => undefined);
 
-      testCaseApi.getProjectCrawlKnowledge(activeProjectId).then((k) => {
-        if (k) setProjectCrawlKnowledge(k);
-      }).catch(() => undefined);
+    testCaseApi.getProjectCrawlKnowledge(activeProjectId).then((k) => {
+      if (k) setProjectCrawlKnowledge(k);
+    }).catch(() => undefined);
 
-      projectService.getGenerations(activeProjectId).then((gens) => {
-        if (gens && Array.isArray(gens)) setProjectGenerations(gens);
-      }).catch(() => undefined);
-    }
-  }, [activeProjectId]);
+    projectService.getGenerations(activeProjectId).then((gens) => {
+      if (gens && Array.isArray(gens)) setProjectGenerations(gens);
+    }).catch(() => undefined);
+  }, [activeProjectId, router, setProject]);
 
   const updateList = (key: Exclude<keyof ManualInputPayload, 'tech_stack'>, values: string[]) =>
     setPayload((current) => ({ ...current, [key]: values }));
@@ -151,13 +165,25 @@ export function InputPage() {
       const validStories = structuredStories.filter((s) => s.text.trim().length > 0);
       if (validStories.length > 0) {
         cleaned.user_stories = validStories.map((s) => s.text.trim());
-        cleaned.acceptance_criteria = validStories.flatMap((s) =>
-          s.acceptance_criteria.map((ac) => ac.trim()).filter(Boolean)
-        );
+        const allCriteria: any[] = [];
+        validStories.forEach((s, storyIdx) => {
+          const parsed = parseAcceptanceCriteria(s.criteriaText);
+          parsed.forEach((c) => {
+            allCriteria.push({
+              text: c,
+              user_story_index: storyIdx,
+            });
+          });
+        });
+        cleaned.acceptance_criteria = allCriteria;
       }
     }
     if (!cleaned.user_stories.length) {
       setUserStoryError('Enter at least one user story to start generation.');
+      return;
+    }
+    if (activeProjectId && !projectCrawlKnowledge) {
+      setError('Complete the Application Crawl before starting Requirement Generation. Valid Application Knowledge is required.');
       return;
     }
     setUserStoryError('');
@@ -241,13 +267,39 @@ export function InputPage() {
                     Adding Generation to: {projectName || `Project ${activeProjectId.slice(0, 8)}`}
                   </h3>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Project ID: {activeProjectId} {projectAppUrl ? `· Target URL: ${projectAppUrl}` : ''}
+                    Project ID: {activeProjectId} {projectAppUrl ? `· Target Application Web Address: ${projectAppUrl}` : ''}
                   </p>
                 </div>
               </div>
               <span className="rounded-md bg-primary/20 px-2.5 py-1 text-xs font-semibold text-primary self-start sm:self-auto">
                 Multi-Generation Workspace
               </span>
+            </div>
+          </div>
+        )}
+
+        {/* Missing Crawl Knowledge Gating Banner */}
+        {activeProjectId && !projectCrawlKnowledge && (
+          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <span className="flex h-3 w-3 rounded-full bg-amber-500" />
+                <div>
+                  <h3 className="text-sm font-bold text-amber-800 dark:text-amber-200">
+                    Complete the Application Crawl before starting Requirement Generation.
+                  </h3>
+                  <p className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">
+                    Verified Application Knowledge must be persisted before requirement and test scenario generation begins.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => router.push(`/projects/${activeProjectId}`)}
+                className="rounded-xl bg-amber-600 px-4 py-2 text-xs font-bold text-white shadow hover:bg-amber-700 transition self-start sm:self-auto"
+              >
+                Open Workspace &amp; Start Crawl
+              </button>
             </div>
           </div>
         )}
@@ -286,7 +338,7 @@ export function InputPage() {
             <div className="flex flex-wrap gap-2">
               {projectGenerations.map((gen, i) => (
                 <div key={gen.workflow_id} className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-1.5 text-xs">
-                  <span className="font-semibold text-primary">Gen {projectGenerations.length - i}</span>
+                  <span className="font-semibold text-primary">Generation {projectGenerations.length - i}</span>
                   <span className="text-muted-foreground">({gen.user_story_count} stories · {gen.test_case_count} tests)</span>
                   <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${gen.status === 'completed' ? 'bg-green-500/20 text-green-600' : 'bg-amber-500/20 text-amber-600'}`}>
                     {gen.status}
@@ -353,17 +405,34 @@ export function InputPage() {
                       <textarea value={story.text} onChange={(event) => setDocumentStories((items) => items.map((item, index) => index === storyIndex ? { ...item, text: event.target.value } : item))} aria-label={`Extracted user story ${storyIndex + 1}`} className="min-h-20 flex-1 rounded-lg border border-input bg-card p-3 text-sm outline-none focus:border-primary" />
                       <button type="button" onClick={() => setDocumentStories((items) => items.filter((_, index) => index !== storyIndex))} className="self-start rounded-lg p-2 text-red-500 hover:bg-red-500/10" aria-label={`Remove extracted story ${storyIndex + 1}`}><Trash2 className="h-4 w-4" /></button>
                     </div>
-                    <p className="mb-2 mt-3 text-xs font-bold uppercase tracking-wide text-muted-foreground">Acceptance criteria</p>
-                    {story.acceptance_criteria.map((criterion, criterionIndex) => (
-                      <div key={criterionIndex} className="mb-2 flex gap-2">
-                        <textarea value={criterion} onChange={(event) => setDocumentStories((items) => items.map((item, index) => index === storyIndex ? { ...item, acceptance_criteria: item.acceptance_criteria.map((value, acIndex) => acIndex === criterionIndex ? event.target.value : value) } : item))} aria-label={`Story ${storyIndex + 1} acceptance criterion ${criterionIndex + 1}`} className="min-h-16 flex-1 rounded-lg border border-input bg-card p-3 text-sm outline-none focus:border-primary" />
-                        <button type="button" onClick={() => setDocumentStories((items) => items.map((item, index) => index === storyIndex ? { ...item, acceptance_criteria: item.acceptance_criteria.filter((_, acIndex) => acIndex !== criterionIndex) } : item))} className="self-start rounded-lg p-2 text-red-500 hover:bg-red-500/10" aria-label={`Remove acceptance criterion ${criterionIndex + 1}`}><Trash2 className="h-4 w-4" /></button>
-                      </div>
-                    ))}
-                    <button type="button" onClick={() => setDocumentStories((items) => items.map((item, index) => index === storyIndex ? { ...item, acceptance_criteria: [...item.acceptance_criteria, ''] } : item))} className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"><Plus className="h-3.5 w-3.5" /> Add criterion</button>
+                    <div className="mt-3 space-y-1.5 border-t border-border/60 pt-3">
+                      <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                        Acceptance Criteria
+                      </label>
+                      <textarea
+                        value={story.acceptance_criteria.join('\n')}
+                        onChange={(event) => {
+                          const lines = event.target.value.split('\n');
+                          setDocumentStories((items) =>
+                            items.map((item, index) =>
+                              index === storyIndex
+                                ? { ...item, acceptance_criteria: lines }
+                                : item
+                            )
+                          );
+                        }}
+                        placeholder="1. First acceptance criterion&#10;2. Second acceptance criterion&#10;3. Third acceptance criterion"
+                        rows={4}
+                        aria-label={`Story ${storyIndex + 1} Acceptance Criteria`}
+                        className="w-full rounded-lg border border-input bg-card p-3 text-sm outline-none focus:border-primary"
+                      />
+                      <p className="text-[11px] text-muted-foreground">
+                        Enter any number of acceptance criteria. You can use numbered lines, bullet points, or separate lines.
+                      </p>
+                    </div>
                   </div>
                 ))}
-                <button type="button" onClick={() => setDocumentStories((items) => [...items, { text: '', acceptance_criteria: [''] }])} className="inline-flex items-center gap-2 text-sm font-semibold text-primary hover:underline"><Plus className="h-4 w-4" /> Add user story</button>
+                <button type="button" onClick={() => setDocumentStories((items) => [...items, { text: '', acceptance_criteria: [''] }])} className="inline-flex items-center gap-2 text-sm font-semibold text-primary hover:underline"><Plus className="h-4 w-4" /> Add User Story</button>
               </div>
             </div>
           )}
@@ -375,11 +444,11 @@ export function InputPage() {
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="font-semibold text-foreground">User Stories &amp; Acceptance Criteria</h2>
-                <p className="mt-0.5 text-xs text-muted-foreground">Add any number of user stories. For each user story, specify its own acceptance criteria.</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">Add any number of user stories. For each user story, specify all its acceptance criteria in one text area.</p>
               </div>
               <button
                 type="button"
-                onClick={() => setStructuredStories((current) => [...current, { id: String(Date.now()), text: '', acceptance_criteria: [''] }])}
+                onClick={() => setStructuredStories((current) => [...current, { id: String(Date.now()), text: '', criteriaText: '' }])}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20 transition"
               >
                 <Plus className="h-4 w-4" /> Add User Story
@@ -425,77 +494,30 @@ export function InputPage() {
                     />
                   </div>
 
-                  {/* Acceptance Criteria for this specific story */}
-                  <div className="mt-3 space-y-2 border-t border-border/60 pt-3">
+                  {/* ONE single large Acceptance Criteria textarea supporting any number of criteria */}
+                  <div className="mt-3 space-y-1.5 border-t border-border/60 pt-3">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                        Acceptance Criteria ({story.acceptance_criteria.length})
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setStructuredStories((current) =>
-                            current.map((item, idx) =>
-                              idx === storyIdx
-                                ? { ...item, acceptance_criteria: [...item.acceptance_criteria, ''] }
-                                : item
-                            )
-                          )
-                        }
-                        className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
-                      >
-                        <Plus className="h-3.5 w-3.5" /> Add AC
-                      </button>
+                      <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                        Acceptance Criteria
+                      </label>
                     </div>
-
-                    {story.acceptance_criteria.map((ac, acIdx) => (
-                      <div key={acIdx} className="flex items-start gap-2">
-                        <textarea
-                          value={ac}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setStructuredStories((current) =>
-                              current.map((item, idx) =>
-                                idx === storyIdx
-                                  ? {
-                                      ...item,
-                                      acceptance_criteria: item.acceptance_criteria.map((c, cIdx) =>
-                                        cIdx === acIdx ? val : c
-                                      ),
-                                    }
-                                  : item
-                              )
-                            );
-                          }}
-                          placeholder={`Acceptance Criterion ${acIdx + 1} (e.g. Display validation warning when required fields are missing)`}
-                          rows={1}
-                          className="min-h-12 flex-1 rounded-lg border border-input bg-card p-2.5 text-sm outline-none focus:border-primary transition"
-                        />
-                        {story.acceptance_criteria.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setStructuredStories((current) =>
-                                current.map((item, idx) =>
-                                  idx === storyIdx
-                                    ? {
-                                        ...item,
-                                        acceptance_criteria: item.acceptance_criteria.filter(
-                                          (_, cIdx) => cIdx !== acIdx
-                                        ),
-                                      }
-                                    : item
-                                )
-                              )
-                            }
-                            className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition self-center"
-                            aria-label={`Remove criterion ${acIdx + 1}`}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        )}
-                      </div>
-                    ))}
+                    <textarea
+                      value={story.criteriaText}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setStructuredStories((current) =>
+                          current.map((item, idx) =>
+                            idx === storyIdx ? { ...item, criteriaText: val } : item
+                          )
+                        );
+                      }}
+                      placeholder={`1. First acceptance criterion.\n2. Second acceptance criterion.\n3. Third acceptance criterion.\n4. Fourth acceptance criterion.\n5. Fifth acceptance criterion.`}
+                      rows={5}
+                      className="w-full rounded-lg border border-input bg-card p-3 text-sm font-normal outline-none focus:border-primary transition leading-relaxed"
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      Enter any number of acceptance criteria. You can use numbered lines (1., 2.), bullet points (-, *), or separate lines. All criteria will be parsed into the generation pipeline.
+                    </p>
                   </div>
                 </div>
               ))}
@@ -522,13 +544,24 @@ export function InputPage() {
         </section>
 
         <div className="flex justify-end">
-          <button
-            type="submit"
-            disabled={submitting}
-            className="inline-flex min-w-52 items-center justify-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-bold text-primary-foreground shadow-lg shadow-primary/20 transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {submitting ? <><LoaderCircle className="h-4 w-4 animate-spin" /> Starting workflow…</> : <>Generate test cases <ArrowRight className="h-4 w-4" /></>}
-          </button>
+          {activeProjectId && !projectCrawlKnowledge ? (
+            <button
+              type="button"
+              disabled
+              title="Complete the Application Crawl before starting Requirement Generation."
+              className="inline-flex min-w-52 items-center justify-center gap-2 rounded-xl bg-muted px-6 py-3 text-sm font-bold text-muted-foreground shadow-sm cursor-not-allowed opacity-60"
+            >
+              Complete Application Crawl First
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={submitting}
+              className="inline-flex min-w-52 items-center justify-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-bold text-primary-foreground shadow-lg shadow-primary/20 transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {submitting ? <><LoaderCircle className="h-4 w-4 animate-spin" /> Starting workflow…</> : <>Generate test cases <ArrowRight className="h-4 w-4" /></>}
+            </button>
+          )}
         </div>
       </form>
     </div>

@@ -160,6 +160,7 @@ export const testCaseApi = {
   },
 
   startCrawlJob(url: string, options?: {
+    target_url?: string;
     page_limit?: number;
     depth_limit?: number;
     max_execution_time_seconds?: number;

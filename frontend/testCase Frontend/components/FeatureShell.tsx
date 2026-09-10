@@ -11,6 +11,7 @@ import {
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
+  PlayCircle,
   Plus,
   Search,
   Sparkles,
@@ -18,20 +19,25 @@ import {
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { NewProjectModal } from '@/components/projects/NewProjectModal';
+import { useTestCaseWorkflowStore } from '../store/workflowStore';
 import { ScrollToBottomButton } from './ScrollToBottomButton';
 import styles from './PremiumShell.module.css';
 
 const navigation = [
-  { href: '/dashboard', label: 'Dashboard', icon: FolderKanban, exact: true },
-  { href: '/test-case-generation', label: 'New Generator', icon: Plus, exact: true },
-  { href: '/test-case-generation/results', label: 'Generated Tests', icon: FileCheck2, exact: false },
-  { href: '/test-case-generation/automation', label: 'Playwright Studio', icon: Code2, exact: false },
-  { href: '/test-case-generation/url-crawler', label: 'App Crawler', icon: Sparkles, exact: false },
+  { href: '/dashboard', label: 'Application Projects', icon: FolderKanban, exact: true },
+  { href: '/test-case-generation/url-crawler', label: 'Application Crawl', icon: Sparkles, exact: false },
+  { href: '/test-case-generation', label: 'Requirement Generations', icon: Plus, exact: true },
+  { href: '/test-case-generation/results', label: 'Test Cases', icon: FileCheck2, exact: false },
+  { href: '/test-case-generation/automation', label: 'Automation', icon: Code2, exact: false },
+  { href: '/test-case-generation/reports', label: 'Execution Reports', icon: PlayCircle, exact: false },
 ];
 
 export function FeatureShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { selectedProjectId, projectId, selectedWorkflowId, workflowId } = useTestCaseWorkflowStore();
+  const currentProjectId = selectedProjectId || projectId;
+  const currentWorkflowId = selectedWorkflowId || workflowId;
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
@@ -58,6 +64,66 @@ export function FeatureShell({ children }: { children: ReactNode }) {
     if (globalQuery.trim()) {
       router.push(`/dashboard?q=${encodeURIComponent(globalQuery.trim())}`);
     }
+  };
+
+  const getNavHref = (label: string, defaultHref: string) => {
+    if (label === 'Application Projects') {
+      return '/dashboard';
+    }
+    if (label === 'Application Crawl') {
+      return currentProjectId ? `/test-case-generation/url-crawler?projectId=${currentProjectId}` : defaultHref;
+    }
+    if (label === 'Requirement Generations') {
+      return currentProjectId ? `/test-case-generation?projectId=${currentProjectId}` : defaultHref;
+    }
+    if (label === 'Test Cases') {
+      const params = new URLSearchParams();
+      if (currentProjectId) params.set('projectId', currentProjectId);
+      if (currentWorkflowId) params.set('workflowId', currentWorkflowId);
+      const qs = params.toString();
+      return qs ? `/test-case-generation/results?${qs}` : defaultHref;
+    }
+    if (label === 'Automation') {
+      const params = new URLSearchParams();
+      if (currentProjectId) params.set('projectId', currentProjectId);
+      if (currentWorkflowId) params.set('workflowId', currentWorkflowId);
+      const qs = params.toString();
+      return qs ? `/test-case-generation/automation?${qs}` : defaultHref;
+    }
+    if (label === 'Execution Reports') {
+      const params = new URLSearchParams();
+      if (currentProjectId) params.set('projectId', currentProjectId);
+      if (currentWorkflowId) params.set('workflowId', currentWorkflowId);
+      const qs = params.toString();
+      return qs ? `/test-case-generation/reports?${qs}` : defaultHref;
+    }
+    return defaultHref;
+  };
+
+  const isNavActive = (label: string, defaultHref: string, exact: boolean) => {
+    if (label === 'Application Projects') {
+      return pathname === '/dashboard' || pathname.startsWith('/projects');
+    }
+    if (label === 'Application Crawl') {
+      return pathname.startsWith('/test-case-generation/url-crawler');
+    }
+    if (label === 'Requirement Generations') {
+      return (
+        pathname === '/test-case-generation' ||
+        pathname.startsWith('/test-case-generation/review') ||
+        pathname.startsWith('/test-case-generation/progress')
+      );
+    }
+    if (label === 'Test Cases') {
+      return pathname.startsWith('/test-case-generation/results');
+    }
+    if (label === 'Automation') {
+      return pathname.startsWith('/test-case-generation/automation');
+    }
+    if (label === 'Execution Reports') {
+      return pathname.startsWith('/test-case-generation/reports');
+    }
+    return exact ? pathname === defaultHref : pathname.startsWith(defaultHref);
   };
 
   return (
@@ -97,11 +163,12 @@ export function FeatureShell({ children }: { children: ReactNode }) {
 
         <nav className={styles.sidebarNav}>
           {navigation.map(({ href, label, icon: Icon, exact }) => {
-            const active = exact ? pathname === href : pathname.startsWith(href);
+            const active = isNavActive(label, href, exact);
+            const targetHref = getNavHref(label, href);
             return (
               <Link
                 key={href}
-                href={href}
+                href={targetHref}
                 onClick={() => setMobileOpen(false)}
                 title={collapsed ? label : undefined}
                 aria-current={active ? 'page' : undefined}

@@ -46,6 +46,14 @@ class ContextPreparationAgent(BaseAgent[StructuredContext]):
         for index, criterion in enumerate(criteria):
             if criterion.get("user_story_id"):
                 continue
+            if "user_story_index" in criterion:
+                try:
+                    us_idx = int(criterion["user_story_index"])
+                    if 0 <= us_idx < len(stories):
+                        criterion["user_story_id"] = str(stories[us_idx]["id"])
+                        continue
+                except (ValueError, TypeError):
+                    pass
             if len(stories) == 1:
                 criterion["user_story_id"] = str(stories[0]["id"])
             elif len(criteria) == len(stories):
@@ -71,7 +79,11 @@ class ContextPreparationAgent(BaseAgent[StructuredContext]):
         trace=[]
         for story in payload["user_stories"]:
             story_id=str(story["id"])
-            criterion_ids=[str(item["id"]) for item in payload["acceptance_criteria"] if str(item.get("user_story_id",""))==story_id]
+            criterion_ids = [
+                str(item["id"])
+                for item in payload["acceptance_criteria"]
+                if str(item.get("user_story_id", "")) == story_id or not item.get("user_story_id")
+            ]
             trace.append(TraceabilityEntry(source_id=story_id,target_ids=shared_target_ids+criterion_ids))
         # Extract focused application knowledge from project crawl knowledge if available
         crawl_knowledge = input_data.get("crawl_knowledge")

@@ -93,6 +93,9 @@ class ScenarioGenerationAgent(BaseAgent[ScenarioBatch]):
             acceptance_criteria_ids = [
                 str(item["id"]) for item in compact_context.get("acceptance_criteria", [])
                 if isinstance(item, dict) and item.get("id")
+            ] or [
+                str(item["id"]) for item in context_dict.get("acceptance_criteria", [])
+                if isinstance(item, dict) and item.get("id")
             ]
             def source_ids(values, available, fallback):
                 valid = set(available)

@@ -173,6 +173,9 @@ export function AutomationPage() {
         if (current.status === 'completed' && current.report) {
           setReport(current.report);
           setShowTestReport(true);
+          if (workflowId) {
+            saveTestProjectArtifacts(workflowId, generation, current.report, comparison, crawl);
+          }
         } else if (current.status === 'failed') {
           setError(current.error || 'The Playwright execution failed.');
         }

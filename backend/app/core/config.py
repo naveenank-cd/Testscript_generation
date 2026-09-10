@@ -128,7 +128,7 @@ class Settings(BaseSettings):
     generated_automation_path: str = str(
         Path(__file__).resolve().parents[3] / "generated_automation"
     )
-    automation_navigation_timeout_seconds: float = 15.0
+    automation_navigation_timeout_seconds: float = 30.0
     automation_action_timeout_seconds: float = 5.0
     automation_execution_workers: int = 4
     automation_navigation_settle_timeout_seconds: float = 1.5
@@ -147,7 +147,7 @@ class Settings(BaseSettings):
     automation_crawl_screenshot_mode: str = "failures"
     automation_crawl_network_idle_timeout_seconds: float = 2.0
     automation_challenge_wait_seconds: float = 15.0
-    automation_crawl_headless: bool = True
+    automation_crawl_headless: bool = False
     seacrawl_fallback_enabled: bool = False
     seacrawl_integration_mode: str = "self_hosted"
     seacrawl_base_url: str = "http://localhost:8000"

@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, Sparkles, FolderPlus, UploadCloud, Globe, FileText, ArrowRight } from 'lucide-react';
 import { useWorkspaceStore } from '@/store/workspaceStore';
 import { useTestCaseWorkflowStore } from '@/testCase Frontend/store/workflowStore';
+import { projectService } from '@/services/projectService';
 
 interface NewProjectModalProps {
   isOpen: boolean;
@@ -15,32 +16,41 @@ interface NewProjectModalProps {
 export const NewProjectModal: React.FC<NewProjectModalProps> = ({ isOpen, onClose }) => {
   const router = useRouter();
   const { createWorkspace } = useWorkspaceStore();
-  const { setWorkflow } = useTestCaseWorkflowStore();
+  const { setProject } = useTestCaseWorkflowStore();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [clientDomain, setClientDomain] = useState('');
   const [targetUrl, setTargetUrl] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
-
+    if (!name.trim() || submitting) return;
+    setSubmitting(true);
     const projectName = name.trim();
-    const projectId = createWorkspace(projectName, description.trim() || `${clientDomain ? `${clientDomain} - ` : ''}Requirements & Test Script Suite`);
-    
-    // Generate workflow ID
-    const workflowId = `wf_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
-
-    // Keep the user-entered name attached to the active project throughout the
-    // generator flow. The generator reads this persisted record after redirect.
-    setWorkflow(workflowId, projectId, projectName);
-    
-    onClose();
-    // Redirect to test case generation wizard or dedicated workspace
-    router.push('/test-case-generation');
+    try {
+      const created = await projectService.createProject({
+        name: projectName,
+        application_url: targetUrl.trim() || undefined,
+      });
+      const projectId = created?.id || createWorkspace(projectName, description.trim() || `${clientDomain ? `${clientDomain} - ` : ''}Requirements & Test Script Suite`);
+      
+      setProject(projectId);
+      
+      onClose();
+      // Redirect directly to the dedicated Application Project Workspace
+      router.push(`/projects/${projectId}`);
+    } catch {
+      const fallbackId = createWorkspace(projectName, description.trim() || 'Requirements & Test Script Suite');
+      setProject(fallbackId);
+      onClose();
+      router.push(`/projects/${fallbackId}`);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -106,13 +116,13 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ isOpen, onClos
 
               <div>
                 <label className="block text-xs font-semibold text-foreground mb-1.5 uppercase tracking-wider flex items-center gap-1.5">
-                  <Globe className="w-3.5 h-3.5 text-primary" /> Target App URL (Optional)
+                  <Globe className="w-3.5 h-3.5 text-primary" /> Target Application Web Address
                 </label>
                 <input
                   type="url"
                   value={targetUrl}
                   onChange={(e) => setTargetUrl(e.target.value)}
-                  placeholder="https://app.aegisportal.com"
+                  placeholder="https://app.example.com"
                   className="w-full h-11 px-4 rounded-xl border border-border/80 bg-background text-sm text-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition"
                 />
               </div>

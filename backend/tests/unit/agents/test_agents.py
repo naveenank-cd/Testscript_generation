@@ -224,3 +224,42 @@ async def test_deduplication_removes_repeated_scenarios_and_testcases():
     deduped_cases = deduplicate_test_cases([tc1, tc2, tc3])
     assert len(deduped_cases) == 2
 
+
+@pytest.mark.asyncio
+async def test_multiple_user_stories_and_criteria_preservation_with_index():
+    agent = ContextPreparationAgent()
+    payload = {
+        "user_stories": [
+            {"text": "As an admin I want to manage users"},
+            {"text": "As a user I want to reset my password"},
+        ],
+        "acceptance_criteria": [
+            {"text": "Admin can list all active users", "user_story_index": 0},
+            {"text": "Admin can disable a user account", "user_story_index": 0},
+            {"text": "Admin can assign roles", "user_story_index": 0},
+            {"text": "User receives a reset link via email", "user_story_index": 1},
+            {"text": "Reset link expires after 15 minutes", "user_story_index": 1},
+        ],
+    }
+    context = await agent.run(payload, ExecutionContext(request_id="test-req-ac", workflow_id="test-wf"))
+    assert len(context.user_stories) == 2
+    assert len(context.acceptance_criteria) == 5
+
+    # Verify every criterion is assigned to its respective story
+    story_0_id = str(context.user_stories[0]["id"])
+    story_1_id = str(context.user_stories[1]["id"])
+
+    story_0_criteria = [c for c in context.acceptance_criteria if c.get("user_story_id") == story_0_id]
+    story_1_criteria = [c for c in context.acceptance_criteria if c.get("user_story_id") == story_1_id]
+
+    assert len(story_0_criteria) == 3
+    assert len(story_1_criteria) == 2
+
+    # Verify traceability map contains the criterion IDs for each story
+    trace_map = {entry.source_id: entry.target_ids for entry in context.traceability_map}
+    for c in story_0_criteria:
+        assert str(c["id"]) in trace_map[story_0_id]
+    for c in story_1_criteria:
+        assert str(c["id"]) in trace_map[story_1_id]
+
+

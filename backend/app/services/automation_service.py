@@ -1565,13 +1565,26 @@ class AutomationService:
 
     async def _navigate_with_retries(self, page: Any, url: str) -> Any:
         last_error: Exception | None = None
+        nav_timeout_ms = int(settings.automation_navigation_timeout_seconds * 1000)
         for attempt in range(settings.automation_navigation_retry_limit + 1):
             try:
-                response = await page.goto(
-                    url,
-                    wait_until="domcontentloaded",
-                    timeout=int(settings.automation_navigation_timeout_seconds * 1000),
-                )
+                try:
+                    response = await page.goto(
+                        url,
+                        wait_until="domcontentloaded",
+                        timeout=nav_timeout_ms,
+                    )
+                except Exception as goto_err:
+                    err_str = str(goto_err).lower()
+                    if "timeout" in type(goto_err).__name__.lower() or "timeout" in err_str:
+                        logger.info("domcontentloaded navigation timed out for %s; retrying with commit wait_until", url)
+                        response = await page.goto(
+                            url,
+                            wait_until="commit",
+                            timeout=nav_timeout_ms,
+                        )
+                    else:
+                        raise goto_err
                 await self._crawl_wait(page)
                 return response
             except Exception as exc:
@@ -1695,6 +1708,7 @@ class AutomationService:
         cancel_event: Event | None = None,
         authentication: Any = None,
         testing_scope: str = "full_application",
+        target_url: str | None = None,
     ) -> tuple[str | None, list[DiscoveredElement]]:
         if settings.app_mock_mode:
             self._crawl_reports[_canonical_page_url(url)] = {
@@ -1708,13 +1722,36 @@ class AutomationService:
                 DiscoveredElement(tag="button", role="button", name="Mock submit"),
                 DiscoveredElement(tag="input", label="Mock input", input_type="text"),
             ]
+        origin = urlsplit(url)
+        if target_url:
+            target_clean = str(target_url).strip()
+            target_split = urlsplit(target_clean)
+            if target_split.netloc and target_split.netloc != origin.netloc:
+                blocked_report = {
+                    "status": "crawl_blocked",
+                    "start_url": url,
+                    "target_url": target_clean,
+                    "failure_reason": (
+                        f"Target Application Web Address '{target_clean}' does not belong to the permitted application boundary '{origin.netloc}'."
+                    ),
+                    "recommended_corrective_action": "Provide a Target Application Web Address on the same domain as the Deployed Application URL.",
+                    "pages_discovered": 0,
+                    "pages_completed": 0,
+                    "pages_skipped": [],
+                    "page_inventory": [],
+                    "events": ["crawl_started", "crawl_blocked"],
+                }
+                self._crawl_reports[_canonical_page_url(url)] = blocked_report
+                return None, []
+
         auth_mode = getattr(authentication, "auth_mode", "no_auth") if authentication else "no_auth"
         auth_ident = getattr(authentication, "get_identifier", None) if authentication else None
         discovery_cache_key = cache.fingerprint(
             "application-crawl",
             {
-                "crawler_version": 5,
+                "crawler_version": 6,
                 "url": _canonical_page_url(url),
+                "target_url": _canonical_page_url(target_url) if target_url else "",
                 "page_limit": settings.automation_crawl_page_limit,
                 "depth_limit": settings.automation_crawl_depth_limit,
                 "testing_scope": testing_scope,
@@ -1754,7 +1791,19 @@ class AutomationService:
             "console_errors": [],
             "network_failures": [],
             "events": ["crawl_started"],
-            "progress": {},
+            "current_activity": f"Launching visible browser for {url}...",
+            "progress": {
+                "status": "Crawling",
+                "pages_discovered": 1,
+                "pages_scanned": 0,
+                "pages_completed": 0,
+                "pages_remaining": 1,
+                "elements_found": 0,
+                "pages_skipped": 0,
+                "elapsed_seconds": 0.0,
+                "elapsed_formatted": "00:00:00",
+                "current_activity": f"Launching visible browser for {url}...",
+            },
             "progress_history": [],
             "recommended_corrective_action": None,
         }
@@ -1767,8 +1816,10 @@ class AutomationService:
             from playwright.async_api import async_playwright
 
             async with async_playwright() as playwright:
+                is_headless = settings.automation_crawl_headless
                 browser = await playwright.chromium.launch(
-                    headless=settings.automation_crawl_headless,
+                    headless=is_headless,
+                    slow_mo=100 if not is_headless else None,
                     args=["--disable-blink-features=AutomationControlled"],
                 )
 
@@ -1803,7 +1854,7 @@ class AutomationService:
                         f"Chrome/{browser.version} Safari/537.36"
                     ),
                     locale="en-US",
-                    viewport={"width": 1440, "height": 900},
+                    viewport={"width": 1280, "height": 800},
                 )
                 try:
                     context.on("dialog", lambda dialog: asyncio.create_task(dialog.dismiss()))
@@ -1847,70 +1898,69 @@ class AutomationService:
                 if authentication and (auth_mode == "credentials" or getattr(authentication, "get_identifier", None) or (isinstance(authentication, dict) and authentication.get("password"))):
                     try:
                         await self._navigate_with_retries(page, url)
-                        if testing_scope != "specific_page":
-                            pre_auth_discovered = await self._capture_interactive_elements(page)
-                            if pre_auth_discovered:
-                                pre_auth_page_title = await page.title()
-                                pre_auth_url = _canonical_page_url(page.url)
-                                pre_auth_raw = [dict(item) for item in pre_auth_discovered]
-                                for item in pre_auth_raw:
-                                    item["page_url"] = pre_auth_url
-                                raw.extend(pre_auth_raw)
+                        pre_auth_discovered = await self._capture_interactive_elements(page)
+                        if pre_auth_discovered:
+                            pre_auth_page_title = await page.title()
+                            pre_auth_url = _canonical_page_url(page.url)
+                            pre_auth_raw = [dict(item) for item in pre_auth_discovered]
+                            for item in pre_auth_raw:
+                                item["page_url"] = pre_auth_url
+                            raw.extend(pre_auth_raw)
 
-                                for item in pre_auth_discovered:
-                                    href = item.get("href")
-                                    if href:
-                                        skip_reason = _link_skip_reason(str(href), origin.netloc)
-                                        if not skip_reason:
-                                            clean_href = _canonical_page_url(href)
-                                            if clean_href not in pre_auth_queued_links and clean_href != pre_auth_url:
-                                                pre_auth_queued_links.append(clean_href)
+                            for item in pre_auth_discovered:
+                                href = item.get("href")
+                                if href:
+                                    skip_reason = _link_skip_reason(str(href), origin.netloc)
+                                    if not skip_reason:
+                                        clean_href = _canonical_page_url(href)
+                                        if clean_href not in pre_auth_queued_links and clean_href != pre_auth_url:
+                                            pre_auth_queued_links.append(clean_href)
 
-                                try:
-                                    pre_auth_dom = await page.content()
-                                except Exception:
-                                    pre_auth_dom = ""
-                                pre_auth_state_fp = hashlib.sha256(
-                                    re.sub(r"\s+", " ", pre_auth_dom).encode("utf-8", errors="ignore")
-                                ).hexdigest()[:16]
-                                snapshot_dir = self.artifact_root / "crawl-evidence" / "dom"
-                                snapshot_dir.mkdir(parents=True, exist_ok=True)
-                                dom_snapshot_path = snapshot_dir / f"{pre_auth_state_fp}.html"
-                                if not dom_snapshot_path.is_file():
-                                    dom_snapshot_path.write_text(pre_auth_dom, encoding="utf-8")
+                            try:
+                                pre_auth_dom = await page.content()
+                            except Exception:
+                                pre_auth_dom = ""
+                            pre_auth_state_fp = hashlib.sha256(
+                                re.sub(r"\s+", " ", pre_auth_dom).encode("utf-8", errors="ignore")
+                            ).hexdigest()[:16]
+                            snapshot_dir = self.artifact_root / "crawl-evidence" / "dom"
+                            snapshot_dir.mkdir(parents=True, exist_ok=True)
+                            dom_snapshot_path = snapshot_dir / f"{pre_auth_state_fp}.html"
+                            if not dom_snapshot_path.is_file():
+                                dom_snapshot_path.write_text(pre_auth_dom, encoding="utf-8")
 
-                                try:
-                                    pre_auth_text = await page.locator("body").inner_text(timeout=5000)
-                                except Exception:
-                                    pre_auth_text = ""
+                            try:
+                                pre_auth_text = await page.locator("body").inner_text(timeout=5000)
+                            except Exception:
+                                pre_auth_text = ""
 
-                                pre_auth_inventory_entry = {
-                                    "url": pre_auth_url,
-                                    "requested_url": url,
-                                    "final_url": pre_auth_url,
-                                    "is_redirect": False,
-                                    "redirect_chain": [url],
-                                    "route": urlsplit(pre_auth_url).path or "/",
-                                    "depth": 0,
-                                    "state_fingerprint": pre_auth_state_fp,
-                                    "application_state": {
-                                        "expanded_selectors": [],
-                                        "scroll_restoration": "top",
-                                    },
-                                    "discovery_timestamp": datetime.now(timezone.utc).isoformat(),
-                                    "http_status": 200,
-                                    "title": pre_auth_page_title,
-                                    "visible_text": pre_auth_text[:50000],
-                                    "dom": pre_auth_dom[:250000],
-                                    "dom_snapshot": str(dom_snapshot_path),
-                                    "accessibility_tree": "",
-                                    "elements": pre_auth_discovered,
-                                    "content_analysis": {},
-                                    "diagnostic": None,
-                                    "forms": [item for item in pre_auth_discovered if item.get("tag") in {"input", "select", "textarea"}],
-                                    "structured_forms": [],
-                                    "links": [item for item in pre_auth_discovered if item.get("href")],
-                                    "buttons": [item for item in pre_auth_discovered if item.get("role") == "button" or item.get("tag") == "button"],
+                            pre_auth_inventory_entry = {
+                                "url": pre_auth_url,
+                                "requested_url": url,
+                                "final_url": pre_auth_url,
+                                "is_redirect": False,
+                                "redirect_chain": [url],
+                                "route": urlsplit(pre_auth_url).path or "/",
+                                "depth": 0,
+                                "state_fingerprint": pre_auth_state_fp,
+                                "application_state": {
+                                    "expanded_selectors": [],
+                                    "scroll_restoration": "top",
+                                },
+                                "discovery_timestamp": datetime.now(timezone.utc).isoformat(),
+                                "http_status": 200,
+                                "title": pre_auth_page_title,
+                                "visible_text": pre_auth_text[:50000],
+                                "dom": pre_auth_dom[:250000],
+                                "dom_snapshot": str(dom_snapshot_path),
+                                "accessibility_tree": "",
+                                "elements": pre_auth_discovered,
+                                "content_analysis": {},
+                                "diagnostic": None,
+                                "forms": [item for item in pre_auth_discovered if item.get("tag") in {"input", "select", "textarea"}],
+                                "structured_forms": [],
+                                "links": [item for item in pre_auth_discovered if item.get("href")],
+                                "buttons": [item for item in pre_auth_discovered if item.get("role") == "button" or item.get("tag") == "button"],
                                     "structured_regions": [],
                                     "validation_messages": [],
                                     "screenshot": None,
@@ -2022,7 +2072,19 @@ class AutomationService:
                         except Exception:
                             pass
 
-                start_page_url = page.url if initial_auth_performed else url
+                if target_url:
+                    target_clean = str(target_url).strip()
+                    target_split = urlsplit(target_clean)
+                    if target_split.netloc and target_split.netloc != origin.netloc:
+                        report["status"] = "crawl_blocked"
+                        report["failure_reason"] = (
+                            f"Target Application Web Address '{target_clean}' does not belong to the permitted application boundary '{origin.netloc}'."
+                        )
+                        report["recommended_corrective_action"] = "Provide a Target Application Web Address on the same domain as the Deployed Application URL."
+                        return None, []
+                    start_page_url = target_clean
+                else:
+                    start_page_url = page.url if initial_auth_performed else url
                 canonical_initial = _canonical_page_url(url)
                 canonical_start = _canonical_page_url(start_page_url)
                 pending = [(start_page_url, 0)]
@@ -2057,17 +2119,25 @@ class AutomationService:
                         report["stop_requested"] = True
                         report["remaining_crawl_queue"] = [item[0] for item in pending]
                         report["events"].append("crawl_stopped")
+                        report["current_activity"] = "Application crawl stopped by user."
                         break
                     now = time.monotonic()
                     elapsed = now - started_at
                     completed = len(report["page_inventory"])
                     average_page_seconds = elapsed / completed if completed else 0
+                    elapsed_formatted = time.strftime("%H:%M:%S", time.gmtime(elapsed))
                     progress = {
+                        "status": "Crawling",
                         "pages_discovered": len(queued),
+                        "pages_scanned": completed,
                         "pages_completed": completed,
                         "pages_remaining": len(pending),
+                        "elements_found": len(raw),
+                        "pages_skipped": len(report["pages_skipped"]),
                         "current_crawl_depth": pending[0][1] if pending else 0,
                         "elapsed_seconds": round(elapsed, 2),
+                        "elapsed_formatted": elapsed_formatted,
+                        "current_activity": report.get("current_activity", "Scanning application..."),
                         "estimated_completion_seconds": (
                             round(average_page_seconds * len(pending), 2)
                             if completed else None
@@ -2088,8 +2158,11 @@ class AutomationService:
                     )
                     if now >= deadline:
                         report["failure_reason"] = "Configurable hard crawl timeout was reached."
+                        report["current_activity"] = "Crawl timeout reached."
                         break
                     page_url, depth = pending.pop(0)
+                    report["current_activity"] = f"Navigating visible browser to: {page_url}"
+                    report["progress"]["current_activity"] = report["current_activity"]
                     canonical_requested = _canonical_page_url(page_url)
                     if canonical_requested in visited and not (len(report["page_inventory"]) == 0 and canonical_requested == canonical_start):
                         continue
@@ -2132,8 +2205,15 @@ class AutomationService:
                             "url": page_url, "reason": "redirected_to_external_domain",
                         })
                         continue
+                    report["current_activity"] = f"Inspecting interactive controls on: {page.url}"
+                    if "progress" in report and isinstance(report["progress"], dict):
+                        report["progress"]["current_activity"] = report["current_activity"]
                     discovered = await self._capture_interactive_elements(page)
                     page_title = await page.title()
+                    report["current_activity"] = f"Discovered {len(discovered)} interactive elements on {page_title or current_url}"
+                    if "progress" in report and isinstance(report["progress"], dict):
+                        report["progress"]["elements_found"] = len(raw) + len(discovered)
+                        report["progress"]["current_activity"] = report["current_activity"]
                     visible_text = await page.locator("body").inner_text(timeout=5000)
                     challenge = _challenge_evidence(
                         title=page_title,
@@ -2452,35 +2532,44 @@ class AutomationService:
                         "screenshot": screenshot,
                     })
                     report["events"].append("page_scanned")
-                    if testing_scope != "specific_page":
-                        for item in discovered:
-                            href = item.get("href")
-                            parsed = urlsplit(href) if href else None
-                            skip_reason = _link_skip_reason(str(href), origin.netloc) if href else None
-                            if href and skip_reason:
-                                report["pages_skipped"].append({
-                                    "url": str(href), "reason": skip_reason,
-                                    "discovered_from": current_url,
-                                })
-                            if parsed and not skip_reason:
-                                clean_href = _canonical_page_url(href)
-                                if (
-                                    depth < settings.automation_crawl_depth_limit
-                                    and clean_href not in visited
-                                    and clean_href not in queued
-                                ):
-                                    pending.append((clean_href, depth + 1))
-                                    queued.add(clean_href)
-                                    report["navigation_relationships"].append({
-                                        "from": current_url, "to": clean_href,
-                                        "via": item.get("name") or item.get("visible_text") or "link",
-                                    })
-                                elif depth >= settings.automation_crawl_depth_limit:
+                    for item in discovered:
+                        href = item.get("href")
+                        parsed = urlsplit(href) if href else None
+                        skip_reason = _link_skip_reason(str(href), origin.netloc) if href else None
+                        if href and skip_reason:
+                            report["pages_skipped"].append({
+                                "url": str(href), "reason": skip_reason,
+                                "discovered_from": current_url,
+                            })
+                        if parsed and not skip_reason:
+                            clean_href = _canonical_page_url(href)
+                            if target_url:
+                                target_path = urlsplit(target_url).path.rstrip("/")
+                                clean_path = urlsplit(clean_href).path.rstrip("/")
+                                if target_path and not (clean_path == target_path or clean_path.startswith(target_path + "/")):
                                     report["pages_skipped"].append({
-                                        "url": clean_href,
-                                        "reason": "maximum_crawl_depth_reached",
+                                        "url": str(href),
+                                        "reason": "outside_target_application_area",
                                         "discovered_from": current_url,
                                     })
+                                    continue
+                            if (
+                                depth < settings.automation_crawl_depth_limit
+                                and clean_href not in visited
+                                and clean_href not in queued
+                            ):
+                                pending.append((clean_href, depth + 1))
+                                queued.add(clean_href)
+                                report["navigation_relationships"].append({
+                                    "from": current_url, "to": clean_href,
+                                    "via": item.get("name") or item.get("visible_text") or "link",
+                                })
+                            elif depth >= settings.automation_crawl_depth_limit:
+                                report["pages_skipped"].append({
+                                    "url": clean_href,
+                                    "reason": "maximum_crawl_depth_reached",
+                                    "discovered_from": current_url,
+                                })
                         if depth < settings.automation_crawl_depth_limit:
                             controls = [
                                 item for item in discovered
@@ -2584,20 +2673,24 @@ class AutomationService:
                 report.get("remaining_crawl_queue") or [item[0] for item in pending]
             )
             elapsed = time.monotonic() - started_at
+            elapsed_formatted = time.strftime("%H:%M:%S", time.gmtime(elapsed))
+            total_elements = sum(len(p.get("elements", [])) for p in report["page_inventory"])
             report["progress"] = {
+                "status": "Completed" if report.get("status") == "crawl_completed" else ("Stopped" if report.get("stop_requested") else ("Blocked" if report.get("status") == "crawl_blocked" else "Incomplete")),
                 "pages_discovered": len(queued),
+                "pages_scanned": len(report["page_inventory"]),
                 "pages_completed": len(report["page_inventory"]),
                 "pages_remaining": len(report["remaining_crawl_queue"]),
+                "elements_found": total_elements,
+                "pages_skipped": len(report["pages_skipped"]),
                 "current_crawl_depth": max(
                     (item.get("depth", 0) for item in report["page_inventory"]),
                     default=0,
                 ),
                 "elapsed_seconds": round(elapsed, 2),
-                "estimated_completion_seconds": (
-                    0 if not report["remaining_crawl_queue"] else report["progress"].get(
-                        "estimated_completion_seconds"
-                    )
-                ),
+                "elapsed_formatted": elapsed_formatted,
+                "current_activity": report.get("current_activity", "Application crawl completed successfully."),
+                "estimated_completion_seconds": 0,
             }
             report["progress_history"].append(report["progress"])
             limit_reached = (
@@ -3324,8 +3417,12 @@ class AutomationService:
         url = str(request.application_url)
         await self._validate_url(url)
         testing_scope = request.testing_scope
-        page_limit = 1 if testing_scope == "specific_page" else request.page_limit
-        depth_limit = 0 if testing_scope == "specific_page" else request.depth_limit
+        if testing_scope == "specific_page":
+            page_limit = min(request.page_limit or 15, 15)
+            depth_limit = min(request.depth_limit or 2, 2)
+        else:
+            page_limit = request.page_limit or settings.automation_crawl_page_limit
+            depth_limit = request.depth_limit or settings.automation_crawl_depth_limit
         original_limits = (
             settings.automation_crawl_page_limit,
             settings.automation_crawl_depth_limit,
@@ -3341,11 +3438,13 @@ class AutomationService:
         try:
             try:
                 try:
+                    target_url = str(request.target_url) if getattr(request, "target_url", None) else None
                     title, elements = await self._discover(
                         url,
                         cancel_event=cancel_event,
                         authentication=request.authentication,
                         testing_scope=testing_scope,
+                        target_url=target_url,
                     )
                 except TypeError:
                     title, elements = await self._discover(url)
@@ -3495,8 +3594,12 @@ class AutomationService:
 
         url = str(request.url)
         testing_scope = request.testing_scope
-        page_limit = 1 if testing_scope == "specific_page" else request.page_limit
-        depth_limit = 0 if testing_scope == "specific_page" else request.depth_limit
+        if testing_scope == "specific_page":
+            page_limit = min(request.page_limit or 15, 15)
+            depth_limit = min(request.depth_limit or 2, 2)
+        else:
+            page_limit = request.page_limit or settings.automation_crawl_page_limit
+            depth_limit = request.depth_limit or settings.automation_crawl_depth_limit
 
         logger.info("crawl_and_generate() start url=%s page_limit=%d depth_limit=%d testing_scope=%s", url, page_limit, depth_limit, testing_scope)
 
@@ -3516,11 +3619,13 @@ class AutomationService:
         try:
             try:
                 try:
+                    target_url = str(request.target_url) if getattr(request, "target_url", None) else None
                     title, elements = await self._discover(
                         url,
                         cancel_event=cancel_event,
                         authentication=request.authentication,
                         testing_scope=testing_scope,
+                        target_url=target_url,
                     )
                 except TypeError:
                     title, elements = await self._discover(url)
@@ -3659,12 +3764,14 @@ class AutomationService:
             crawl_id, len(scripts), skipped_count,
         )
 
-        if not scripts and not crawl_report.get("stop_requested"):
+        has_discovered_knowledge = bool(application_map.get("pages") or elements)
+        if not scripts and not has_discovered_knowledge and not crawl_report.get("stop_requested"):
             raise AutomationError(
                 "No scripts could be generated from the crawled URL. "
                 "Ensure the URL loads a real UI and is not behind a login wall."
             )
-        crawl_report["events"].append("script_generation_completed")
+        if scripts:
+            crawl_report["events"].append("script_generation_completed")
         if crawl_report.get("status") == "crawl_incomplete":
             crawl_report["events"].append("partial_script_generation_completed")
 

@@ -18,6 +18,7 @@ class GenerateScriptsRequest(BaseModel):
 class CrawlApplicationRequest(BaseModel):
     workflow_id: UUID
     application_url: HttpUrl
+    target_url: HttpUrl | None = None
     page_limit: int = Field(default=250, ge=1, le=500)
     depth_limit: int = Field(default=15, ge=1, le=20)
     max_execution_time_seconds: int = Field(default=300, ge=30, le=3600)
@@ -424,6 +425,7 @@ class CrawlAndGenerateRequest(BaseModel):
     """
 
     url: HttpUrl
+    target_url: HttpUrl | None = None
     page_limit: int = Field(default=250, ge=1, le=500)
     depth_limit: int = Field(default=15, ge=1, le=20)
     max_execution_time_seconds: int = Field(default=300, ge=30, le=3600)

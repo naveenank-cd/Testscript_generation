@@ -27,7 +27,9 @@ import {
   AlertTriangle,
   ExternalLink,
   ChevronRight,
-  Database
+  Database,
+  LoaderCircle,
+  Square,
 } from 'lucide-react';
 import { testCaseApi } from '@/testCase Frontend/services/testCaseApi';
 import { projectService, BackendProject } from '@/services/projectService';
@@ -82,6 +84,19 @@ export default function DedicatedProjectWorkspacePage() {
   const [copiedScriptIndex, setCopiedScriptIndex] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Application Crawl states
+  const [crawlUrl, setCrawlUrl] = useState('');
+  const [crawlScope, setCrawlScope] = useState<'full_application' | 'specific_page'>('full_application');
+  const [targetPageAddress, setTargetPageAddress] = useState('');
+  const [authMode, setAuthMode] = useState<'no_auth' | 'credentials' | 'existing_session'>('no_auth');
+  const [authIdentifier, setAuthIdentifier] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authSessionState, setAuthSessionState] = useState('');
+  const [crawlJob, setCrawlJob] = useState<any | null>(null);
+  const [crawlBusy, setCrawlBusy] = useState(false);
+  const [crawlError, setCrawlError] = useState('');
+  const [showCrawlConfig, setShowCrawlConfig] = useState(false);
+
   useEffect(() => hydrate(), [hydrate]);
 
   // Set active project in global store
@@ -123,6 +138,109 @@ export default function DedicatedProjectWorkspacePage() {
     void loadProjectData();
     return () => { disposed = true; };
   }, [projectId]);
+
+  // Sync crawlUrl with project's application_url when loaded
+  useEffect(() => {
+    if (project?.application_url && !crawlUrl) {
+      setCrawlUrl(project.application_url);
+    }
+  }, [project?.application_url, crawlUrl]);
+
+  const isCrawling = Boolean(
+    crawlJob && ['queued', 'running', 'stopping'].includes(crawlJob.status)
+  );
+
+  // Poll active crawl job
+  useEffect(() => {
+    if (!crawlJob?.job_id || !isCrawling) return;
+    let disposed = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const current = await testCaseApi.getCrawlJob(crawlJob.job_id);
+        if (disposed) return;
+        setCrawlJob(current);
+        if (current.status === 'completed') {
+          const fresh = await testCaseApi.getProjectCrawlKnowledge(projectId).catch(() => null);
+          if (fresh && !disposed) setCrawlKnowledge(fresh);
+        } else if (current.status === 'failed') {
+          setCrawlError(current.error || 'The application crawl could not be completed.');
+        }
+      } catch {
+        // Polling retry
+      } finally {
+        if (!disposed && isCrawling) timer = window.setTimeout(poll, 1500);
+      }
+    };
+    void poll();
+    return () => {
+      disposed = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [crawlJob?.job_id, isCrawling, projectId]);
+
+  const handleStartCrawl = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isCrawling && crawlJob) {
+      if (crawlBusy) return;
+      setCrawlBusy(true);
+      try {
+        setCrawlJob(await testCaseApi.stopCrawlJob(crawlJob.job_id));
+      } catch (err: any) {
+        setCrawlError(err?.message || 'Could not stop crawl');
+      } finally {
+        setCrawlBusy(false);
+      }
+      return;
+    }
+
+    const trimmed = crawlUrl.trim();
+    if (!trimmed || crawlBusy) return;
+    setCrawlBusy(true);
+    setCrawlError('');
+
+    let authPayload: any = undefined;
+    if (authMode === 'credentials') {
+      authPayload = {
+        auth_mode: 'credentials',
+        identifier: authIdentifier.trim() || undefined,
+        password: authPassword || undefined,
+      };
+    } else if (authMode === 'existing_session') {
+      let parsed: any = authSessionState;
+      try { parsed = JSON.parse(authSessionState); } catch {}
+      authPayload = {
+        auth_mode: 'existing_session',
+        session_state: parsed,
+      };
+    }
+
+    const targetUrlVal = targetPageAddress.trim() || undefined;
+    const startUrl = (crawlScope === 'specific_page' && targetUrlVal)
+      ? targetUrlVal
+      : trimmed;
+
+    try {
+      if (trimmed !== project?.application_url) {
+        projectService.updateProject(projectId, { application_url: trimmed }).catch(() => undefined);
+      }
+      const job = await testCaseApi.startCrawlJob(startUrl, {
+        target_url: targetUrlVal,
+        page_limit: crawlScope === 'specific_page' ? 15 : 100,
+        depth_limit: crawlScope === 'specific_page' ? 2 : 10,
+        max_execution_time_seconds: 300,
+        testing_scope: crawlScope,
+        authentication: authPayload,
+        project_id: projectId,
+        project_name: project?.name,
+      });
+      setCrawlJob(job);
+    } catch (err: any) {
+      setCrawlError(err?.message || 'Could not start application crawl');
+    } finally {
+      setCrawlBusy(false);
+    }
+  };
 
   // When selectedWorkflowId changes, fetch that specific generation's workflow result & artifacts
   useEffect(() => {
@@ -231,12 +349,17 @@ export default function DedicatedProjectWorkspacePage() {
     setTimeout(() => setCopiedScriptIndex(null), 2000);
   };
 
-  const hasCrawl = Boolean(crawlKnowledge || (project?.crawl_knowledge && Object.keys(project.crawl_knowledge).length > 0));
+  const hasCrawl = Boolean(
+    (crawlKnowledge && (crawlKnowledge.crawl_status === 'crawl_completed' || crawlKnowledge.pages_crawled > 0)) ||
+    (project?.crawl_knowledge && Object.keys(project.crawl_knowledge).length > 0 && ((project.crawl_knowledge as any).crawl_status === 'crawl_completed' || (project.crawl_knowledge as any).pages_crawled > 0))
+  );
   const pagesCrawled = crawlKnowledge?.pages_crawled || project?.crawl_knowledge?.pages_crawled || crawlKnowledge?.application_map?.pages?.length || 0;
   const elementsFound = crawlKnowledge?.elements_found || project?.crawl_knowledge?.elements_found || crawlKnowledge?.discovered_elements?.length || 0;
+  const pagesSkipped = crawlJob?.progress?.pages_skipped ?? crawlKnowledge?.crawl_report?.pages_skipped?.length ?? (project?.crawl_knowledge as any)?.crawl_report?.pages_skipped?.length ?? 0;
+  const elapsedFormatted = crawlJob?.progress?.elapsed_formatted || crawlKnowledge?.crawl_report?.progress?.elapsed_formatted || (project?.crawl_knowledge as any)?.crawl_report?.progress?.elapsed_formatted || '00:00:15';
 
   const tabsConfig: { id: ArtifactTab; label: string; icon: React.ElementType; count: number }[] = [
-    { id: 'stories', label: 'User Stories & AC', icon: FileText, count: userStories.length },
+    { id: 'stories', label: 'User Stories & Acceptance Criteria', icon: FileText, count: userStories.length },
     { id: 'scenarios', label: 'Test Scenarios', icon: ShieldCheck, count: testScenarios.length },
     { id: 'testcases', label: 'Test Cases', icon: FileCheck2, count: testCases.length },
     { id: 'scripts', label: 'Playwright Scripts', icon: Code2, count: playwrightScripts.length },
@@ -258,13 +381,25 @@ export default function DedicatedProjectWorkspacePage() {
         </Link>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          <Link
-            href={`/test-case-generation?projectId=${projectId}`}
-            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-purple-600 px-4 py-2.5 text-xs font-bold text-white shadow-md shadow-orange-500/20 hover:opacity-95 transition"
-          >
-            <Plus className="h-4 w-4" />
-            <span>+ Start New Generation</span>
-          </Link>
+          {hasCrawl ? (
+            <Link
+              href={`/test-case-generation?projectId=${projectId}`}
+              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-purple-600 px-4 py-2.5 text-xs font-bold text-white shadow-md shadow-orange-500/20 hover:opacity-95 transition"
+            >
+              <Plus className="h-4 w-4" />
+              <span>+ Start New Requirement Generation</span>
+            </Link>
+          ) : (
+            <button
+              type="button"
+              disabled
+              title="Complete the Application Crawl before starting Requirement Generation."
+              className="inline-flex items-center gap-2 rounded-xl bg-muted px-4 py-2.5 text-xs font-bold text-muted-foreground cursor-not-allowed opacity-60 transition"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Start Requirement Generation (Complete Crawl First)</span>
+            </button>
+          )}
 
           <Link
             href={`/test-case-generation/automation?projectId=${projectId}`}
@@ -276,69 +411,474 @@ export default function DedicatedProjectWorkspacePage() {
         </div>
       </div>
 
-      {/* ── PROJECT HEADER CARD ────────────────────────────────────────── */}
-      <div className="relative overflow-hidden rounded-3xl border border-border/80 bg-card p-6 shadow-sm md:p-8">
-        <div className="absolute -right-20 -top-24 h-64 w-64 rounded-full bg-purple-500/15 blur-3xl pointer-events-none" />
-        <div className="relative flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
-          <div>
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-primary">
-                <FolderKanban className="h-3.5 w-3.5" />
-                Application Project
-              </span>
-              <span className="rounded-full bg-muted px-2.5 py-0.5 text-[11px] font-mono text-muted-foreground">
-                ID: {projectId}
-              </span>
-            </div>
-
-            <h1 className="text-2xl font-extrabold tracking-tight text-foreground md:text-4xl">
-              {project?.name || `Project ${projectId.slice(0, 8)}`}
-            </h1>
-
-            {/* Project Metadata & Status Chips */}
-            <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
-              {/* Target URL */}
-              <div className="flex items-center gap-1.5 rounded-xl border border-border/70 bg-background/60 px-3 py-1.5 text-muted-foreground font-medium">
-                <Globe className="h-3.5 w-3.5 text-primary" />
-                <span>{project?.application_url || 'Target URL not configured'}</span>
-                {project?.application_url && (
-                  <a href={project.application_url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-primary ml-1">
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                )}
-              </div>
-
-              {/* Crawl Knowledge Status */}
-              <div className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 font-semibold ${
-                hasCrawl
-                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                  : 'border-border/70 bg-background/60 text-muted-foreground'
-              }`}>
-                <span className={`h-2 w-2 rounded-full ${hasCrawl ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground'}`} />
-                <span>{hasCrawl ? `Crawl Knowledge: ${pagesCrawled} pages · ${elementsFound} verified elements` : 'Pending Application Crawl'}</span>
-              </div>
-
-              {/* Requirement Generations Count */}
-              <div className="flex items-center gap-1.5 rounded-xl border border-border/70 bg-background/60 px-3 py-1.5 font-semibold text-foreground">
-                <Layers className="h-3.5 w-3.5 text-purple-500" />
-                <span>{generations.length} {generations.length === 1 ? 'Requirement Generation' : 'Requirement Generations'}</span>
-              </div>
-            </div>
+      {/* ── PROJECT HEADER CARD (WITH INTENTIONAL SKELETON LOADER) ───────── */}
+      {loading ? (
+        <div className="rounded-3xl border border-border/80 bg-card p-6 shadow-sm md:p-8 animate-pulse">
+          <div className="h-6 w-44 rounded-full bg-muted mb-4" />
+          <div className="h-9 w-72 rounded-xl bg-muted mb-4" />
+          <div className="flex flex-wrap gap-3">
+            <div className="h-8 w-48 rounded-xl bg-muted" />
+            <div className="h-8 w-56 rounded-xl bg-muted" />
           </div>
+        </div>
+      ) : (
+        <div className="relative overflow-hidden rounded-3xl border border-border/80 bg-card p-6 shadow-sm md:p-8">
+          <div className="absolute -right-20 -top-24 h-64 w-64 rounded-full bg-purple-500/15 blur-3xl pointer-events-none" />
+          <div className="relative flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+            <div>
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-primary">
+                  <FolderKanban className="h-3.5 w-3.5" />
+                  Application Project
+                </span>
+                <span className="rounded-full bg-muted px-2.5 py-0.5 text-[11px] font-mono text-muted-foreground">
+                  ID: {projectId}
+                </span>
+              </div>
 
-          <div className="flex items-center gap-4 border-t border-border/60 pt-4 md:border-0 md:pt-0">
-            <div className="text-right">
-              <span className="block text-2xl font-extrabold text-foreground">{playwrightScripts.length}</span>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Active Scripts</span>
+              <h1 className="text-2xl font-extrabold tracking-tight text-foreground md:text-4xl">
+                {project?.name || `Project ${projectId.slice(0, 8)}`}
+              </h1>
+
+              {/* Project Metadata & Status Chips */}
+              <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
+                {/* Target Application Web Address */}
+                <div className="flex items-center gap-1.5 rounded-xl border border-border/70 bg-background/60 px-3 py-1.5 text-muted-foreground font-medium">
+                  <Globe className="h-3.5 w-3.5 text-primary" />
+                  <span>{project?.application_url || crawlUrl || 'Target Application Web Address not configured'}</span>
+                  {(project?.application_url || crawlUrl) && (
+                    <a href={project?.application_url || crawlUrl} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-primary ml-1" title="Open Target Application Web Address">
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+                </div>
+
+                {/* Crawl Knowledge Status */}
+                <div className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 font-semibold ${
+                  hasCrawl
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                    : 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                }`}>
+                  <span className={`h-2 w-2 rounded-full ${hasCrawl ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+                  <span>{hasCrawl ? `Verified Knowledge: ${pagesCrawled} pages · ${elementsFound} elements` : 'Crawl Required Before Requirement Generation'}</span>
+                </div>
+
+                {/* Requirement Generations Count */}
+                <div className="flex items-center gap-1.5 rounded-xl border border-border/70 bg-background/60 px-3 py-1.5 font-semibold text-foreground">
+                  <Layers className="h-3.5 w-3.5 text-purple-500" />
+                  <span>{generations.length} {generations.length === 1 ? 'Requirement Generation' : 'Requirement Generations'}</span>
+                </div>
+              </div>
             </div>
-            <div className="h-8 w-px bg-border/60" />
-            <div className="text-right">
-              <span className="block text-lg font-extrabold capitalize text-primary">{executionStatus.replaceAll('_', ' ')}</span>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Execution Status</span>
+
+            <div className="flex items-center gap-4 border-t border-border/60 pt-4 md:border-0 md:pt-0">
+              <div className="text-right">
+                <span className="block text-2xl font-extrabold text-foreground">{playwrightScripts.length}</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Active Scripts</span>
+              </div>
+              <div className="h-8 w-px bg-border/60" />
+              <div className="text-right">
+                <span className="block text-lg font-extrabold capitalize text-primary">{executionStatus.replaceAll('_', ' ')}</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Execution Status</span>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* ── APPLICATION CRAWL & KNOWLEDGE SECTION (FLOW GATEWAY) ────────── */}
+      <section className="rounded-3xl border border-border/80 bg-card p-6 shadow-sm space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-border/60 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <Sparkles className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-foreground">Application Crawl &amp; Verified Knowledge</h2>
+              <p className="text-xs text-muted-foreground">
+                Discovers reachable application routes and interactive locators required for requirements and test automation.
+              </p>
+            </div>
+          </div>
+
+          {hasCrawl && !isCrawling && (
+            <button
+              type="button"
+              onClick={() => setShowCrawlConfig((v) => !v)}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-background px-3.5 py-1.5 text-xs font-semibold hover:bg-muted transition"
+            >
+              <RefreshCw className="h-3.5 w-3.5 text-primary" />
+              <span>{showCrawlConfig ? 'Hide Crawl Controls' : 'Re-Crawl Application'}</span>
+            </button>
+          )}
+        </div>
+
+        {/* CRAWL STATUS FEEDBACK & FORM */}
+        {crawlError && !isCrawling && crawlJob?.status !== 'failed' && (
+          <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-xs font-semibold text-red-600 dark:text-red-300">
+            {crawlError}
+          </div>
+        )}
+
+        {/* TWO-PART CRAWL EXPERIENCE: MAIN WORKSPACE REAL-TIME PROGRESS */}
+        {isCrawling && (
+          <div className="rounded-2xl border border-primary/30 bg-primary/5 p-6 space-y-4 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-primary/20 pb-4">
+              <div>
+                <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
+                  <span className="relative flex h-3 w-3">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-primary"></span>
+                  </span>
+                  Application Crawl in Progress
+                </h3>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-xs font-semibold text-muted-foreground">Status:</span>
+                  <span className="text-xs font-bold text-primary">
+                    {crawlJob?.status === 'stopping' ? 'Stopping...' : 'Crawling'}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground ml-2">
+                    (Visible Playwright browser navigating application on desktop)
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleStartCrawl}
+                disabled={crawlBusy || crawlJob?.status === 'stopping'}
+                className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-rose-700 disabled:opacity-60 transition active:scale-95"
+              >
+                <Square className="h-3.5 w-3.5 fill-current" /> Stop Crawling
+              </button>
+            </div>
+
+            {/* REAL-TIME CRAWL METRICS GRID */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              <div className="rounded-xl border border-border/70 bg-card/70 p-3 shadow-xs">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Pages discovered</span>
+                <span className="text-lg font-black text-foreground">{crawlJob?.progress?.pages_discovered ?? 1}</span>
+              </div>
+              <div className="rounded-xl border border-border/70 bg-card/70 p-3 shadow-xs">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Pages scanned</span>
+                <span className="text-lg font-black text-foreground">{crawlJob?.progress?.pages_scanned ?? crawlJob?.progress?.pages_completed ?? 0}</span>
+              </div>
+              <div className="rounded-xl border border-border/70 bg-card/70 p-3 shadow-xs">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Interactive elements found</span>
+                <span className="text-lg font-black text-primary">{crawlJob?.progress?.elements_found ?? 0}</span>
+              </div>
+              <div className="rounded-xl border border-border/70 bg-card/70 p-3 shadow-xs">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Pages skipped</span>
+                <span className="text-lg font-black text-muted-foreground">{crawlJob?.progress?.pages_skipped ?? 0}</span>
+              </div>
+              <div className="rounded-xl border border-border/70 bg-card/70 p-3 shadow-xs">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Elapsed time</span>
+                <span className="text-lg font-black text-foreground font-mono">{crawlJob?.progress?.elapsed_formatted || '00:00:00'}</span>
+              </div>
+            </div>
+
+            {/* CURRENT ACTIVITY */}
+            <div className="rounded-xl border border-border/60 bg-muted/40 px-3.5 py-2.5 text-xs flex items-center gap-2">
+              <span className="font-bold text-foreground shrink-0">Current activity:</span>
+              <span className="text-muted-foreground truncate font-medium">
+                {crawlJob?.progress?.current_activity || 'Scanning application...'}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* STOPPED CRAWL STATE */}
+        {crawlJob?.status === 'stopped' && !isCrawling && (
+          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6 space-y-4 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-amber-500/20 pb-3">
+              <div className="flex items-center gap-2 text-sm font-bold text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                <span>Application Crawl Stopped</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCrawlConfig(true)}
+                className="rounded-xl border border-border bg-card px-3.5 py-1.5 text-xs font-semibold text-foreground hover:bg-muted transition"
+              >
+                Re-Crawl Application
+              </button>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="rounded-xl border border-border/70 bg-card/70 p-3">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Pages scanned</span>
+                <span className="text-lg font-black text-foreground">{crawlJob?.progress?.pages_scanned ?? 0}</span>
+              </div>
+              <div className="rounded-xl border border-border/70 bg-card/70 p-3">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Interactive elements found</span>
+                <span className="text-lg font-black text-amber-600">{crawlJob?.progress?.elements_found ?? 0}</span>
+              </div>
+              <div className="rounded-xl border border-border/70 bg-card/70 p-3">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Pages skipped</span>
+                <span className="text-lg font-black text-muted-foreground">{crawlJob?.progress?.pages_skipped ?? 0}</span>
+              </div>
+              <div className="rounded-xl border border-border/70 bg-card/70 p-3">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Elapsed time</span>
+                <span className="text-lg font-black text-foreground font-mono">{crawlJob?.progress?.elapsed_formatted || '00:00:00'}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* FAILED CRAWL STATE */}
+        {crawlJob?.status === 'failed' && !isCrawling && (
+          <div className="rounded-2xl border border-red-500/30 bg-red-500/5 p-6 space-y-4 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-red-500/20 pb-3">
+              <div className="flex items-center gap-2 text-sm font-bold text-red-600 dark:text-red-400">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                <span>Application Crawl Failed</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCrawlConfig(true)}
+                className="rounded-xl border border-border bg-card px-3.5 py-1.5 text-xs font-semibold text-foreground hover:bg-muted transition"
+              >
+                Retry Crawl
+              </button>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <div className="rounded-xl border border-border/70 bg-card/70 p-3">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Pages scanned</span>
+                <span className="text-lg font-black text-foreground">{crawlJob?.progress?.pages_scanned ?? 0}</span>
+              </div>
+              <div className="rounded-xl border border-border/70 bg-card/70 p-3">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Interactive elements found</span>
+                <span className="text-lg font-black text-muted-foreground">{crawlJob?.progress?.elements_found ?? 0}</span>
+              </div>
+              <div className="rounded-xl border border-border/70 bg-card/70 p-3">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Elapsed time</span>
+                <span className="text-lg font-black text-foreground font-mono">{crawlJob?.progress?.elapsed_formatted || '00:00:00'}</span>
+              </div>
+            </div>
+            <div className="space-y-1 text-xs">
+              <p className="text-red-600 dark:text-red-300 font-semibold">
+                <strong>Reason:</strong> {crawlJob?.error || crawlError || 'The crawler could not access or interact with the target application.'}
+              </p>
+              <p className="text-muted-foreground">
+                <strong>Recommended action:</strong> Verify the Target Application Web Address is online and reachable, check authentication credentials if required, and retry.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {!hasCrawl && !isCrawling && crawlJob?.status !== 'failed' && crawlJob?.status !== 'stopped' && (
+          <div className="flex items-center gap-2.5 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs font-semibold text-amber-700 dark:text-amber-300">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <span>Complete the Application Crawl before starting Requirement Generation.</span>
+          </div>
+        )}
+
+        {hasCrawl && !showCrawlConfig && !isCrawling ? (
+          <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-6 space-y-4 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-emerald-500/20 pb-4">
+              <div>
+                <h3 className="text-sm font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4" />
+                  Application Crawl Completed
+                </h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Verified reachable routes, captured interactive elements, and structured Page Object Models.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCrawlConfig(true)}
+                  className="rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-semibold text-foreground hover:bg-muted transition"
+                >
+                  Re-Crawl Application
+                </button>
+                <Link
+                  href={`/test-case-generation?projectId=${projectId}`}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-purple-600 px-5 py-2 text-xs font-bold text-white shadow-md shadow-orange-500/20 hover:opacity-95 transition"
+                >
+                  <Plus className="h-4 w-4" />
+                  <span>Start Requirement Generation</span>
+                </Link>
+              </div>
+            </div>
+
+            {/* REAL METRICS SUMMARY */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="rounded-xl border border-border/70 bg-card/70 p-3">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Pages scanned</span>
+                <span className="text-lg font-black text-foreground">{pagesCrawled}</span>
+              </div>
+              <div className="rounded-xl border border-border/70 bg-card/70 p-3">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Interactive elements found</span>
+                <span className="text-lg font-black text-emerald-600 dark:text-emerald-400">{elementsFound}</span>
+              </div>
+              <div className="rounded-xl border border-border/70 bg-card/70 p-3">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Pages skipped</span>
+                <span className="text-lg font-black text-muted-foreground">{pagesSkipped}</span>
+              </div>
+              <div className="rounded-xl border border-border/70 bg-card/70 p-3">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">Elapsed time</span>
+                <span className="text-lg font-black text-foreground font-mono">{elapsedFormatted}</span>
+              </div>
+            </div>
+
+            {/* GATING & READINESS CONFIRMATIONS */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 text-xs">
+              <div className="flex items-center gap-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-3.5 py-2.5 text-emerald-700 dark:text-emerald-300 font-semibold">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                <span>Application Knowledge: Stored successfully</span>
+              </div>
+              <div className="flex items-center gap-2 rounded-xl bg-purple-500/10 border border-purple-500/20 px-3.5 py-2.5 text-purple-700 dark:text-purple-300 font-semibold">
+                <Sparkles className="h-4 w-4 shrink-0 text-purple-600 dark:text-purple-400" />
+                <span>Requirement Generation: Ready</span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          (!hasCrawl || showCrawlConfig) && !isCrawling && (
+            <form onSubmit={handleStartCrawl} className="space-y-4">
+              <div className="space-y-2">
+                <label htmlFor="workspace-crawl-url" className="text-xs font-semibold text-foreground uppercase tracking-wider">
+                  Target Application Web Address <span className="text-red-500">*</span>
+                </label>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <input
+                    id="workspace-crawl-url"
+                    type="url"
+                    required
+                    value={crawlUrl}
+                    onChange={(e) => setCrawlUrl(e.target.value)}
+                    placeholder="https://your-deployed-app.example.com"
+                    className="min-w-0 flex-1 rounded-xl border border-border/80 bg-background px-4 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition"
+                  />
+                  <button
+                    type="submit"
+                    disabled={crawlBusy || !crawlUrl.trim()}
+                    className="inline-flex min-w-44 items-center justify-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-xs font-bold text-primary-foreground shadow hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60 transition"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    <span>{hasCrawl ? 'Re-Crawl Application' : 'Start Application Crawl'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Crawl Scope & Mode Selection */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <label htmlFor="workspace-crawl-scope" className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                    Crawl Scope
+                  </label>
+                  <select
+                    id="workspace-crawl-scope"
+                    value={crawlScope}
+                    onChange={(e) => setCrawlScope(e.target.value as any)}
+                    className="w-full rounded-xl border border-border/80 bg-background px-3 py-2 text-xs outline-none focus:border-primary transition"
+                  >
+                    <option value="full_application">Full Application (Mandatory / Default)</option>
+                    <option value="specific_page">Target Application Web Address (Optional Focused Crawl)</option>
+                  </select>
+                  <p className="text-[11px] text-muted-foreground">
+                    {crawlScope === 'full_application'
+                      ? 'Crawl the complete reachable application within the permitted application boundary.'
+                      : 'Start from this specific application page and completely crawl its related reachable application area.'}
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label htmlFor="workspace-auth-mode" className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                    Authentication Option
+                  </label>
+                  <select
+                    id="workspace-auth-mode"
+                    value={authMode}
+                    onChange={(e) => setAuthMode(e.target.value as any)}
+                    className="w-full rounded-xl border border-border/80 bg-background px-3 py-2 text-xs outline-none focus:border-primary transition"
+                  >
+                    <option value="no_auth">No Authentication Required</option>
+                    <option value="credentials">Credentials (Identifier + Password)</option>
+                    <option value="existing_session">Existing Session State</option>
+                  </select>
+                  <p className="text-[11px] text-muted-foreground">
+                    Optional authentication credentials to access protected application sections.
+                  </p>
+                </div>
+              </div>
+
+              {/* Focused Target Application Web Address (Mode 2) */}
+              {crawlScope === 'specific_page' && (
+                <div className="space-y-1.5 rounded-xl border border-border/80 bg-muted/20 p-4">
+                  <label htmlFor="workspace-target-address" className="text-xs font-semibold">
+                    Optional Target Application Web Address (Focused Sub-Area)
+                  </label>
+                  <input
+                    id="workspace-target-address"
+                    type="url"
+                    value={targetPageAddress}
+                    onChange={(e) => setTargetPageAddress(e.target.value)}
+                    placeholder={crawlUrl || 'https://your-deployed-app.example.com/section'}
+                    className="w-full rounded-lg border border-border/80 bg-background px-3 py-2 text-xs outline-none focus:border-primary transition"
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Specify the exact page to begin the focused crawl. The crawler will completely inspect this target page and its related reachable internal navigation.
+                  </p>
+                </div>
+              )}
+
+              {authMode === 'credentials' && (
+                <div className="grid gap-4 rounded-xl border border-border/80 bg-muted/20 p-4 grid-cols-1 sm:grid-cols-2 min-w-0 max-w-full overflow-hidden">
+                  <div className="space-y-1.5 min-w-0">
+                    <label htmlFor="workspace-auth-identifier" className="text-xs font-semibold block">
+                      Generic Identifier <span className="text-muted-foreground font-normal">(Email, Username, ID)</span>
+                    </label>
+                    <input
+                      id="workspace-auth-identifier"
+                      type="text"
+                      placeholder="e.g. user@example.com or admin"
+                      value={authIdentifier}
+                      onChange={(e) => setAuthIdentifier(e.target.value)}
+                      className="w-full min-w-0 max-w-full box-border rounded-lg border border-border/80 bg-background px-3 py-2 text-xs outline-none focus:border-primary transition"
+                    />
+                  </div>
+                  <div className="space-y-1.5 min-w-0">
+                    <label htmlFor="workspace-auth-password" className="text-xs font-semibold block">
+                      Password
+                    </label>
+                    <input
+                      id="workspace-auth-password"
+                      type="password"
+                      placeholder="••••••••"
+                      value={authPassword}
+                      onChange={(e) => setAuthPassword(e.target.value)}
+                      className="w-full min-w-0 max-w-full box-border rounded-lg border border-border/80 bg-background px-3 py-2 text-xs outline-none focus:border-primary transition"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {authMode === 'existing_session' && (
+                <div className="space-y-1.5 rounded-xl border border-border/80 bg-muted/20 p-4">
+                  <label htmlFor="workspace-auth-session" className="text-xs font-semibold">
+                    Session Storage State JSON
+                  </label>
+                  <textarea
+                    id="workspace-auth-session"
+                    rows={2}
+                    placeholder='{"cookies": [...], "origins": [...]}'
+                    value={authSessionState}
+                    onChange={(e) => setAuthSessionState(e.target.value)}
+                    className="w-full rounded-lg border border-border/80 bg-background px-3 py-2 font-mono text-xs outline-none focus:border-primary transition"
+                  />
+                </div>
+              )}
+
+              {hasCrawl && (
+                <p className="text-[11px] text-muted-foreground italic">
+                  Note: Re-crawling updates the application knowledge while preserving all previous requirement generations.
+                </p>
+              )}
+            </form>
+          )
+        )}
+      </section>
 
       {/* ── GENERATION HISTORY / SELECTOR ──────────────────────────────── */}
       <section className="space-y-3">
