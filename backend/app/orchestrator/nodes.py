@@ -26,7 +26,7 @@ async def generate_test_cases_node(s):
     return s
 async def validate_test_cases_node(s): s["status"]=s["current_stage"]="validating_test_cases"; s["testcase_attempt_count"]+=1; s["testcase_validation"]=(await TestCaseValidationAgent().execute({"scenarios":{"scenarios":s["scenarios"]},"test_cases":{"test_cases":s["test_cases"]},"confidence_threshold":s.get("confidence_threshold",.95)},_ctx(s))).model_dump(mode="json"); return s
 async def regenerate_test_cases_node(s):
-    s["status"]=s["current_stage"]="generating_test_cases"
+    s["status"]=s["current_stage"]="generating_test_cases";s["testcase_attempt_count"]=s.get("testcase_attempt_count",0)+1
     payload={"scenarios":s["scenarios"],"context":s["structured_context"],"existing_test_cases":s["test_cases"],"validation":s["testcase_validation"]}
     s["test_cases"]=(await TestCaseGenerationAgent().execute(payload,_ctx(s))).model_dump(mode="json")["test_cases"]
     app_k = s.get("crawl_knowledge") or s.get("structured_context", {}).get("application_knowledge")

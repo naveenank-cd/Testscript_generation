@@ -113,6 +113,8 @@ class MockLLMProvider(LLMProvider):
                     "postconditions": ["The mock result is recorded for review."],
                     "requirement_ids": requirement_ids,
                     "acceptance_criteria_ids": acceptance_ids,
+                    "user_story_ids": user_story_ids or ["US-MOCK-1"],
+                    "feature_ids": feature_ids,
                     "source_references": [scenario_id],
                     "automation_candidate": True,
                 })

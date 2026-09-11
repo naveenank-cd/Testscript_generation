@@ -10,12 +10,21 @@ class TestCaseValidationAgent(BaseAgent[ValidationResult]):
     async def run(self,input_data,execution_context:ExecutionContext)->ValidationResult:
         scenarios=ScenarioBatch.model_validate(input_data["scenarios"]).scenarios; cases=TestCaseBatch.model_validate(input_data["test_cases"]).test_cases
         sids={s.scenario_id for s in scenarios}; duplicates=duplicate_indexes([c.title for c in cases]); expected=sum(bool(st.expected_result.strip()) for c in cases for st in c.steps); steps=sum(len(c.steps) for c in cases)
-        ac={x for s in scenarios for x in s.acceptance_criteria_ids}; vals={"scenario_coverage":coverage(sids,[c.scenario_id for c in cases]),"acceptance_criteria_coverage":coverage(ac,[x for c in cases for x in c.acceptance_criteria_ids]) if ac else 0.0,"step_completeness":sum(bool(c.steps) for c in cases)/len(cases) if cases else 0,"expected_result_quality":expected/steps if steps else 0,"traceability":sum(c.scenario_id in sids for c in cases)/len(cases) if cases else 0,"consistency_accuracy":sum(c.scenario_id in sids for c in cases)/len(cases) if cases else 0,"duplicate_hallucination_control":1-len(duplicates)/len(cases) if cases else 0}
+        ac={x for s in scenarios for x in s.acceptance_criteria_ids}
+        vals={
+            "scenario_coverage":coverage(sids,[c.scenario_id for c in cases]),
+            "acceptance_criteria_coverage":coverage(ac,[x for c in cases for x in c.acceptance_criteria_ids]) if ac else 1.0,
+            "step_completeness":sum(bool(c.steps) for c in cases)/len(cases) if cases else 0,
+            "expected_result_quality":expected/steps if steps else 0,
+            "traceability":sum(c.scenario_id in sids for c in cases)/len(cases) if cases else 0,
+            "consistency_accuracy":sum(c.scenario_id in sids for c in cases)/len(cases) if cases else 0,
+            "duplicate_hallucination_control":1-len(duplicates)/len(cases) if cases else 0
+        }
         issues=[ValidationIssue(issue_code="DUPLICATE_TESTCASE",description="Test case duplicates another",affected_entity_id=cases[i].test_case_id,recommendation="Regenerate this test case only") for i in duplicates]
         labels={"scenario_coverage":"scenario coverage","acceptance_criteria_coverage":"acceptance-criteria coverage","step_completeness":"step completeness","expected_result_quality":"expected-result quality","traceability":"scenario traceability"}
         entity_scores={}; entity_breakdowns=[]
         for i,c in enumerate(cases):
-            scenario_quality=float(c.scenario_id in sids); ac_quality=mapping_quality(ac,c.acceptance_criteria_ids) if ac else 0.0
+            scenario_quality=float(c.scenario_id in sids); ac_quality=mapping_quality(ac,c.acceptance_criteria_ids) if ac else 1.0
             step_quality=sum(content_quality(step.action,30) for step in c.steps)/len(c.steps) if c.steps else 0.0
             expected_quality=sum(content_quality(step.expected_result,40) for step in c.steps)/len(c.steps) if c.steps else 0.0
             traceability=sum((scenario_quality,ac_quality,float(bool(c.requirement_ids))))/3
@@ -30,4 +39,8 @@ class TestCaseValidationAgent(BaseAgent[ValidationResult]):
                 issues.append(ValidationIssue(issue_code=f"LOW_{metric.upper()}",description=f"Incomplete {label}: {round(vals[metric]*100)}%",recommendation=f"Populate the missing {label} data"))
         score=round(sum(entity_scores.values())/len(entity_scores),4) if entity_scores else 0.0
         threshold=float(input_data.get("confidence_threshold",.95))
-        return ValidationResult(confidence_score=score,score_breakdown=vals,entity_scores=entity_scores,status=ValidationStatus.passed if score>=threshold else ValidationStatus.failed,issues=issues,failed_entity_ids=[cases[i].test_case_id for i in duplicates],regeneration_instructions=[x.recommendation for x in issues if x.recommendation])
+        failed_entity_ids=[cases[i].test_case_id for i in duplicates]
+        for c in cases:
+            if entity_scores.get(str(c.test_case_id), 0) < threshold and c.test_case_id not in failed_entity_ids:
+                failed_entity_ids.append(c.test_case_id)
+        return ValidationResult(confidence_score=score,score_breakdown=vals,entity_scores=entity_scores,status=ValidationStatus.passed if score>=threshold else ValidationStatus.failed,issues=issues,failed_entity_ids=failed_entity_ids,regeneration_instructions=[x.recommendation for x in issues if x.recommendation])

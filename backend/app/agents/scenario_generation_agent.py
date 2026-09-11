@@ -20,7 +20,7 @@ def deduplicate_scenarios(scenarios: list[Scenario]) -> list[Scenario]:
                 break
             title_sim = similarity(scenario.title, existing.title)
             desc_sim = similarity(scenario.description, existing.description)
-            if title_sim >= 0.85 or (scenario.scenario_type == existing.scenario_type and (title_sim >= 0.75 or desc_sim >= 0.85)):
+            if scenario.scenario_type == existing.scenario_type and (title_sim >= 0.85 or (title_sim >= 0.75 and desc_sim >= 0.85)):
                 is_duplicate = True
                 existing.requirement_ids = list(dict.fromkeys(existing.requirement_ids + scenario.requirement_ids))
                 existing.acceptance_criteria_ids = list(dict.fromkeys(existing.acceptance_criteria_ids + scenario.acceptance_criteria_ids))

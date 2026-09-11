@@ -95,7 +95,13 @@ class WorkflowService:
     async def resume(self,wid,request):
         state=self.get(wid)
         if state["status"] not in {"scenario_manual_review","testcase_manual_review"}: raise ManualReviewRequired("Workflow is not awaiting manual review")
-        if request.corrected_data: state["input_payload"].update(request.corrected_data)
+        if request.corrected_data:
+            if request.stage=="scenario_manual_review" and "scenarios" in request.corrected_data:
+                state["scenarios"]=request.corrected_data["scenarios"]
+            elif request.stage=="testcase_manual_review" and "test_cases" in request.corrected_data:
+                state["test_cases"]=request.corrected_data["test_cases"]
+            else:
+                state["input_payload"].update(request.corrected_data)
         state["manual_feedback"]=request.feedback
         if request.stage=="scenario_manual_review": state["scenario_attempt_count"]=0;state["current_stage"]="pending"
         else: state["testcase_attempt_count"]=0;state["current_stage"]="generating_test_cases"

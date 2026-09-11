@@ -9,27 +9,29 @@ from app.schemas.context_schema import StructuredContext
 from app.schemas.scenario_schema import ScenarioBatch
 from app.schemas.testcase_schema import TestCase, TestCaseBatch
 from app.utils.similarity import similarity
+from collections import defaultdict
 
 
 def deduplicate_test_cases(test_cases: list[TestCase]) -> list[TestCase]:
     unique: list[TestCase] = []
-    seen_scenario_ids = set()
     seen_case_ids = set()
     for tc in test_cases:
-        tc_scenario_id = str(tc.scenario_id)
         tc_case_id = str(tc.test_case_id)
-        if tc_scenario_id in seen_scenario_ids or tc_case_id in seen_case_ids:
+        if tc_case_id in seen_case_ids:
             continue
         is_duplicate = False
         for existing in unique:
-            title_sim = similarity(tc.title, existing.title)
-            desc_sim = similarity(tc.description, existing.description)
-            if title_sim >= 0.88 or (title_sim >= 0.75 and desc_sim >= 0.85):
+            if str(tc.test_case_id) == str(existing.test_case_id):
                 is_duplicate = True
                 break
+            if str(tc.scenario_id) == str(existing.scenario_id):
+                title_sim = similarity(tc.title, existing.title)
+                desc_sim = similarity(tc.description, existing.description)
+                if title_sim >= 0.88 or (title_sim >= 0.75 and desc_sim >= 0.85):
+                    is_duplicate = True
+                    break
         if not is_duplicate:
             unique.append(tc)
-            seen_scenario_ids.add(tc_scenario_id)
             seen_case_ids.add(tc_case_id)
     return unique
 
@@ -81,42 +83,45 @@ class TestCaseGenerationAgent(BaseAgent[TestCaseBatch]):
         generated = []
         for batch in batches(scenario_items, settings.llm_testcase_batch_size):
             result = await generate_batch(batch)
-            by_scenario = {}
+            by_scenario = defaultdict(list)
             for idx, test_case in enumerate(result.test_cases):
                 sc_id = str(test_case.scenario_id)
                 matched_scenario = next((s for s in batch if str(s["scenario_id"]) == sc_id), None)
                 if matched_scenario:
-                    by_scenario.setdefault(sc_id, test_case)
+                    by_scenario[sc_id].append(test_case)
                 elif idx < len(batch):
                     target_sc_id = str(batch[idx]["scenario_id"])
-                    if target_sc_id not in by_scenario:
-                        test_case.scenario_id = batch[idx]["scenario_id"]
-                        if "project_id" in batch[idx]:
-                            test_case.project_id = batch[idx]["project_id"]
-                        by_scenario[target_sc_id] = test_case
+                    test_case.scenario_id = batch[idx]["scenario_id"]
+                    if "project_id" in batch[idx]:
+                        test_case.project_id = batch[idx]["project_id"]
+                    by_scenario[target_sc_id].append(test_case)
             for scenario in batch:
                 scenario_id = str(scenario["scenario_id"])
-                if scenario_id not in by_scenario:
+                if not by_scenario[scenario_id]:
                     singleton = await generate_batch([scenario])
-                    match = next(
-                        (case for case in singleton.test_cases if str(case.scenario_id) == scenario_id),
-                        None,
-                    )
-                    if match is None and singleton.test_cases:
-                        match = singleton.test_cases[0]
-                        match.scenario_id = scenario["scenario_id"]
-                        if "project_id" in scenario:
-                            match.project_id = scenario["project_id"]
-                    if match is None:
+                    matches = [
+                        case for case in singleton.test_cases
+                        if str(case.scenario_id) == scenario_id
+                    ]
+                    if not matches and singleton.test_cases:
+                        for case in singleton.test_cases:
+                            case.scenario_id = scenario["scenario_id"]
+                            if "project_id" in scenario:
+                                case.project_id = scenario["project_id"]
+                        matches = singleton.test_cases
+                    if not matches:
                         raise ValueError(f"LLM did not return a complete test case for scenario {scenario_id}")
-                    by_scenario[scenario_id] = match
-            ordered = [by_scenario[str(scenario["scenario_id"])] for scenario in batch]
+                    by_scenario[scenario_id].extend(matches)
+            ordered = [tc for scenario in batch for tc in by_scenario[str(scenario["scenario_id"])]]
             for test_case in ordered:
                 source_scenario = next(item for item in batch if str(item["scenario_id"]) == str(test_case.scenario_id))
-                for field in ("requirement_ids", "acceptance_criteria_ids"):
+                for field in ("requirement_ids", "acceptance_criteria_ids", "user_story_ids", "feature_ids"):
                     available = [str(value) for value in source_scenario.get(field, [])]
-                    mapped = [str(value) for value in getattr(test_case, field) if str(value) in set(available)]
+                    mapped = [str(value) for value in getattr(test_case, field, []) if str(value) in set(available)]
                     setattr(test_case, field, list(dict.fromkeys(mapped or available)))
-                test_case.source_references=list(dict.fromkeys(test_case.source_references+[str(x) for x in context_dict.get("image_ids",[])]))
+                if hasattr(test_case, "unsupported_evidence_reasons"):
+                    scenario_reasons = source_scenario.get("unsupported_evidence_reasons", [])
+                    test_case.unsupported_evidence_reasons = list(dict.fromkeys((test_case.unsupported_evidence_reasons or []) + scenario_reasons))
+                test_case.source_references=list(dict.fromkeys((test_case.source_references or [str(test_case.scenario_id)])+[str(x) for x in context_dict.get("image_ids",[])]))
             generated.extend(ordered)
         return TestCaseBatch(test_cases=deduplicate_test_cases(generated))
