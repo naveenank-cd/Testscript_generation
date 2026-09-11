@@ -202,8 +202,11 @@ export function InputPage() {
       const response = await testCaseApi.startWorkflow(documentSession
         ? { project_id: activeProjectId || undefined, project_name: projectName.trim() || undefined, source_type: 'manual', document_session_id: documentSession.session_id, mock_mode: mockMode, confidence_threshold: confidenceThreshold / 100 }
         : { project_id: activeProjectId || undefined, project_name: projectName.trim() || undefined, source_type: 'manual', input_payload: cleaned, mock_mode: mockMode, confidence_threshold: confidenceThreshold / 100 });
-      setWorkflow(response.workflow_id, response.project_id || activeProjectId || null, projectName.trim() || undefined);
-      router.push('/test-case-generation/progress');
+      const finalPid = response.project_id || activeProjectId || '';
+      const params = new URLSearchParams();
+      if (finalPid) params.set('projectId', finalPid);
+      params.set('workflowId', response.workflow_id);
+      router.push(`/test-case-generation/progress?${params.toString()}`);
     } catch (requestError) {
       setError(friendlyError(requestError));
     } finally {

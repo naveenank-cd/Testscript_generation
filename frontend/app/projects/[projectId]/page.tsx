@@ -402,7 +402,7 @@ export default function DedicatedProjectWorkspacePage() {
           )}
 
           <Link
-            href={`/test-case-generation/automation?projectId=${projectId}`}
+            href={`/test-case-generation/automation?projectId=${projectId}${selectedWorkflowId ? `&workflowId=${selectedWorkflowId}` : ''}`}
             className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-bold hover:bg-muted transition"
           >
             <Zap className="h-4 w-4 text-purple-500" />
@@ -738,7 +738,7 @@ export default function DedicatedProjectWorkspacePage() {
             <form onSubmit={handleStartCrawl} className="space-y-4">
               <div className="space-y-2">
                 <label htmlFor="workspace-crawl-url" className="text-xs font-semibold text-foreground uppercase tracking-wider">
-                  Target Application Web Address <span className="text-red-500">*</span>
+                  Deployed Application URL <span className="text-red-500">*</span>
                 </label>
                 <div className="flex flex-col sm:flex-row gap-3">
                   <input
@@ -761,7 +761,25 @@ export default function DedicatedProjectWorkspacePage() {
                 </div>
               </div>
 
-              {/* Crawl Scope & Mode Selection */}
+              {/* Target Application Web Address (Optional) */}
+              <div className="space-y-1.5">
+                <label htmlFor="workspace-target-address" className="text-xs font-semibold text-foreground uppercase tracking-wider">
+                  Target Application Web Address <span className="text-muted-foreground font-normal normal-case">(Optional)</span>
+                </label>
+                <input
+                  id="workspace-target-address"
+                  type="url"
+                  value={targetPageAddress}
+                  onChange={(e) => setTargetPageAddress(e.target.value)}
+                  placeholder="https://your-deployed-app.example.com/target-path"
+                  className="w-full rounded-xl border border-border/80 bg-background px-4 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Optional. If supplied, the crawler focuses on this target page and its related reachable application area within the application boundary.
+                </p>
+              </div>
+
+              {/* Crawl Scope & Authentication */}
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
                   <label htmlFor="workspace-crawl-scope" className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
@@ -773,19 +791,19 @@ export default function DedicatedProjectWorkspacePage() {
                     onChange={(e) => setCrawlScope(e.target.value as any)}
                     className="w-full rounded-xl border border-border/80 bg-background px-3 py-2 text-xs outline-none focus:border-primary transition"
                   >
-                    <option value="full_application">Full Application (Mandatory / Default)</option>
-                    <option value="specific_page">Target Application Web Address (Optional Focused Crawl)</option>
+                    <option value="full_application">Full Application *</option>
+                    <option value="specific_page">Target Application Web Address (Optional)</option>
                   </select>
                   <p className="text-[11px] text-muted-foreground">
                     {crawlScope === 'full_application'
                       ? 'Crawl the complete reachable application within the permitted application boundary.'
-                      : 'Start from this specific application page and completely crawl its related reachable application area.'}
+                      : 'Crawl the target application address and its reachable related pages.'}
                   </p>
                 </div>
 
                 <div className="space-y-1.5">
                   <label htmlFor="workspace-auth-mode" className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                    Authentication Option
+                    Authentication
                   </label>
                   <select
                     id="workspace-auth-mode"
@@ -798,30 +816,11 @@ export default function DedicatedProjectWorkspacePage() {
                     <option value="existing_session">Existing Session State</option>
                   </select>
                   <p className="text-[11px] text-muted-foreground">
-                    Optional authentication credentials to access protected application sections.
+                    Authentication configuration to access protected application sections.
                   </p>
                 </div>
               </div>
 
-              {/* Focused Target Application Web Address (Mode 2) */}
-              {crawlScope === 'specific_page' && (
-                <div className="space-y-1.5 rounded-xl border border-border/80 bg-muted/20 p-4">
-                  <label htmlFor="workspace-target-address" className="text-xs font-semibold">
-                    Optional Target Application Web Address (Focused Sub-Area)
-                  </label>
-                  <input
-                    id="workspace-target-address"
-                    type="url"
-                    value={targetPageAddress}
-                    onChange={(e) => setTargetPageAddress(e.target.value)}
-                    placeholder={crawlUrl || 'https://your-deployed-app.example.com/section'}
-                    className="w-full rounded-lg border border-border/80 bg-background px-3 py-2 text-xs outline-none focus:border-primary transition"
-                  />
-                  <p className="text-[11px] text-muted-foreground">
-                    Specify the exact page to begin the focused crawl. The crawler will completely inspect this target page and its related reachable internal navigation.
-                  </p>
-                </div>
-              )}
 
               {authMode === 'credentials' && (
                 <div className="grid gap-4 rounded-xl border border-border/80 bg-muted/20 p-4 grid-cols-1 sm:grid-cols-2 min-w-0 max-w-full overflow-hidden">
@@ -1103,9 +1102,17 @@ export default function DedicatedProjectWorkspacePage() {
           {/* TAB 3: STEP-BY-STEP TEST CASES */}
           {activeTab === 'testcases' && (
             <div className="space-y-4">
-              <div className="pb-3 border-b border-border/60">
-                <h3 className="text-base font-bold">Step-by-Step Test Cases</h3>
-                <p className="text-xs text-muted-foreground">Actionable execution steps with preconditions and expected outcomes</p>
+              <div className="flex justify-between items-center pb-3 border-b border-border/60">
+                <div>
+                  <h3 className="text-base font-bold">Step-by-Step Test Cases</h3>
+                  <p className="text-xs text-muted-foreground">Actionable execution steps with preconditions and expected outcomes</p>
+                </div>
+                <Link
+                  href={`/test-case-generation/results?projectId=${projectId}${selectedWorkflowId ? `&workflowId=${selectedWorkflowId}` : ''}`}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-background px-3.5 py-1.5 text-xs font-bold hover:bg-muted transition"
+                >
+                  <FileCheck2 className="h-3.5 w-3.5 text-primary" /> Open Test Cases View
+                </Link>
               </div>
               <div className="space-y-4">
                 {testCases.map((tc: any, idx) => (
@@ -1181,7 +1188,7 @@ export default function DedicatedProjectWorkspacePage() {
                     Generate modular Page Object Models and test specifications from your test cases.
                   </p>
                   <Link
-                    href={`/test-case-generation/automation?projectId=${projectId}`}
+                    href={`/test-case-generation/automation?projectId=${projectId}${selectedWorkflowId ? `&workflowId=${selectedWorkflowId}` : ''}`}
                     className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-bold text-primary-foreground shadow"
                   >
                     <span>Open Automation Runner</span>
@@ -1194,9 +1201,17 @@ export default function DedicatedProjectWorkspacePage() {
           {/* TAB 5: EXECUTION REPORTS */}
           {activeTab === 'execution' && (
             <div className="space-y-4">
-              <div className="pb-3 border-b border-border/60">
-                <h3 className="text-base font-bold">Execution Reports & Evidence</h3>
-                <p className="text-xs text-muted-foreground">Test execution pass/fail statistics</p>
+              <div className="flex justify-between items-center pb-3 border-b border-border/60">
+                <div>
+                  <h3 className="text-base font-bold">Execution Reports & Evidence</h3>
+                  <p className="text-xs text-muted-foreground">Test execution pass/fail statistics</p>
+                </div>
+                <Link
+                  href={`/test-case-generation/reports?projectId=${projectId}${selectedWorkflowId ? `&workflowId=${selectedWorkflowId}` : ''}`}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-background px-3.5 py-1.5 text-xs font-bold hover:bg-muted transition"
+                >
+                  <PlayCircle className="h-3.5 w-3.5 text-primary" /> Open Execution Reports
+                </Link>
               </div>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
                 <div className="rounded-2xl border border-border bg-muted/20 p-4 text-center">

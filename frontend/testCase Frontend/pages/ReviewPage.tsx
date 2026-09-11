@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Check, LoaderCircle, RotateCcw } from 'lucide-react';
 import { StatePanel } from '../components/StatePanel';
 import { ConfidenceBadge, ConfidenceRing, EntityId, TraceabilityChain } from '../components/TraceabilityUI';
@@ -12,7 +12,13 @@ import { confidencePercent, friendlyError } from '../utils';
 
 export function ReviewPage() {
   const router = useRouter();
-  const { workflowId, snapshot, result, hydrate, setResult, setSnapshot } = useTestCaseWorkflowStore();
+  const searchParams = useSearchParams();
+  const urlProjectId = searchParams.get('projectId');
+  const urlWorkflowId = searchParams.get('workflowId');
+  const { workflowId: storeWorkflowId, projectId: storeProjectId, snapshot, result, hydrate, setResult, setSnapshot, syncContext } = useTestCaseWorkflowStore();
+  const workflowId = urlWorkflowId || storeWorkflowId;
+  const projectId = urlProjectId || storeProjectId;
+
   const [data, setData] = useState<WorkflowResult | null>(result);
   const [feedback, setFeedback] = useState('');
   const [correctedData, setCorrectedData] = useState('{}');
@@ -20,7 +26,12 @@ export function ReviewPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
-  useEffect(() => hydrate(), [hydrate]);
+  useEffect(() => {
+    hydrate();
+    if (urlProjectId || urlWorkflowId) {
+      syncContext(urlProjectId, urlWorkflowId);
+    }
+  }, [hydrate, syncContext, urlProjectId, urlWorkflowId]);
   useEffect(() => {
     if (!workflowId) return;
     let cancelled = false;
@@ -63,7 +74,7 @@ export function ReviewPage() {
     try {
       const response = await testCaseApi.resumeWorkflow(workflowId, { stage, feedback: feedback.trim(), corrected_data: corrected });
       setSnapshot(response);
-      router.push('/test-case-generation/progress');
+      router.push(projectId ? `/test-case-generation/progress?projectId=${projectId}&workflowId=${workflowId}` : `/test-case-generation/progress?workflowId=${workflowId}`);
     } catch (requestError) {
       setError(friendlyError(requestError));
     } finally {
@@ -77,8 +88,12 @@ export function ReviewPage() {
       const response = await testCaseApi.approveManualReview(workflowId, stage);
       setSnapshot(response);
       if (response.status === 'completed') {
-        const completed = await testCaseApi.getWorkflowResult(workflowId);setResult(completed);router.push('/test-case-generation/results');
-      } else router.push('/test-case-generation/progress');
+        const completed = await testCaseApi.getWorkflowResult(workflowId);
+        setResult(completed);
+        router.push(projectId ? `/test-case-generation/results?projectId=${projectId}&workflowId=${workflowId}` : `/test-case-generation/results?workflowId=${workflowId}`);
+      } else {
+        router.push(projectId ? `/test-case-generation/progress?projectId=${projectId}&workflowId=${workflowId}` : `/test-case-generation/progress?workflowId=${workflowId}`);
+      }
     } catch (requestError) { setError(friendlyError(requestError)); }
     finally { setSubmitting(false); }
   };
@@ -150,7 +165,7 @@ export function ReviewPage() {
             <button onClick={resume} disabled={submitting} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-60">
               {submitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />} Resume workflow
             </button>
-            <button onClick={() => router.push('/test-case-generation/progress')} className="rounded-lg border border-border px-4 py-2 text-sm font-semibold hover:bg-muted">Return to progress</button>
+            <button onClick={() => router.push(projectId ? `/test-case-generation/progress?projectId=${projectId}&workflowId=${workflowId}` : `/test-case-generation/progress?workflowId=${workflowId}`)} className="rounded-lg border border-border px-4 py-2 text-sm font-semibold hover:bg-muted">Return to progress</button>
           </div>
         </section>
       </div>

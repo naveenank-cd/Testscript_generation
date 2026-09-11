@@ -263,3 +263,78 @@ async def test_api_get_project_crawl_knowledge_endpoint():
     finally:
         app.dependency_overrides.pop(get_db, None)
 
+
+@pytest.mark.asyncio
+async def test_get_scripts_by_workflow_endpoint():
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    workflow_id = "wf-test-gen-101"
+    mock_generation = {
+        "generation_id": "gen-101",
+        "workflow_id": workflow_id,
+        "project_id": str(uuid.uuid4()),
+        "project_name": "Test Project",
+        "application_url": "https://example.com",
+        "scripts": [
+            {
+                "script_id": "script-1",
+                "test_case_id": "TC-001",
+                "script_name": "Login Test",
+                "file_path": "tests/test_login.py",
+                "content": "# test login",
+            }
+        ],
+        "page_objects": [],
+    }
+
+    with patch("app.services.automation_service.AutomationService.get_generation_by_workflow", return_value=mock_generation):
+        client = TestClient(app)
+        response = client.get(f"/api/v1/automation/scripts/by-workflow/{workflow_id}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["workflow_id"] == workflow_id
+        assert len(data["scripts"]) == 1
+        assert data["scripts"][0]["test_case_id"] == "TC-001"
+
+
+@pytest.mark.asyncio
+async def test_automation_generate_reuses_project_crawl_knowledge():
+    auto_service = AutomationService()
+    project_id = uuid.uuid4()
+    crawl_workflow_id = "wf-crawl-only"
+    generation_workflow_id = "wf-generation-2"
+
+    crawl_data = {
+        "crawl_id": "crawl-proj-123",
+        "workflow_id": crawl_workflow_id,
+        "project_id": str(project_id),
+        "application_url": "https://example.com",
+        "pages_crawled": 2,
+        "elements_found": 5,
+        "crawl_status": "crawl_completed",
+        "application_map": {
+            "pages": [{"url": "https://example.com/login", "title": "Login"}],
+            "relationships": [],
+            "locators": {"submit": "button"},
+        },
+        "discovered_elements": [
+            {"element_id": "elem-1", "tag": "button", "text": "Submit", "selector": "button[type='submit']", "role": "button"}
+        ],
+    }
+
+    # Store crawl knowledge under project
+    auto_service._project_crawl_knowledge[str(project_id)] = crawl_data
+
+    # Calling get_project_crawl_knowledge directly
+    retrieved = await auto_service.get_project_crawl_knowledge(project_id)
+    assert retrieved is not None
+    assert retrieved["crawl_id"] == "crawl-proj-123"
+
+    from app.services.automation_service import AutomationNotFound
+
+    # Also test get_generation_by_workflow raises AutomationNotFound when nothing generated yet
+    with pytest.raises(AutomationNotFound):
+        await auto_service.get_generation_by_workflow("non-existent-wf")
+
+

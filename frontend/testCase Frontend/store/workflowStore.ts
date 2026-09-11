@@ -45,6 +45,7 @@ interface WorkflowStore {
   deleteProject: (workflowId: string) => void;
   renameProject: (workflowId: string, newName: string) => void;
   hydrate: () => void;
+  syncContext: (projectId?: string | null, workflowId?: string | null) => void;
   clear: () => void;
   clearSelection: () => void;
 }
@@ -237,18 +238,48 @@ export const useTestCaseWorkflowStore = create<WorkflowStore>((set) => ({
   hydrate: () => {
     try {
       const projects = readProjects();
-      set({
-        selectedWorkflowId: null,
-        selectedProjectId: null,
-        workflowId: null,
-        projectId: null,
-        snapshot: null,
+      let activeWorkflowId: string | null = null;
+      let activeProjectId: string | null = null;
+      try {
+        const active = JSON.parse(sessionStorage.getItem(WORKFLOW_STORAGE_KEY) ?? 'null') as {
+          workflowId?: string | null;
+          projectId?: string | null;
+        } | null;
+        if (active?.workflowId) activeWorkflowId = active.workflowId;
+        if (active?.projectId) activeProjectId = active.projectId;
+      } catch {}
+
+      set((state) => ({
         projects,
-      });
+        workflowId: state.workflowId || activeWorkflowId,
+        selectedWorkflowId: state.selectedWorkflowId || activeWorkflowId,
+        projectId: state.projectId || activeProjectId,
+        selectedProjectId: state.selectedProjectId || activeProjectId,
+      }));
     } catch {
       sessionStorage.removeItem(WORKFLOW_STORAGE_KEY);
       sessionStorage.removeItem(WORKFLOW_SNAPSHOT_KEY);
     }
+  },
+  syncContext: (projectId?: string | null, workflowId?: string | null) => {
+    set((state) => {
+      const nextProjectId = projectId !== undefined ? projectId : state.projectId;
+      const nextWorkflowId = workflowId !== undefined ? workflowId : state.workflowId;
+      try {
+        const active = JSON.parse(sessionStorage.getItem(WORKFLOW_STORAGE_KEY) ?? '{}');
+        sessionStorage.setItem(
+          WORKFLOW_STORAGE_KEY,
+          JSON.stringify({ ...active, projectId: nextProjectId, workflowId: nextWorkflowId })
+        );
+      } catch {}
+      if (nextProjectId) setActiveProjectId(nextProjectId);
+      return {
+        projectId: nextProjectId,
+        selectedProjectId: nextProjectId,
+        workflowId: nextWorkflowId,
+        selectedWorkflowId: nextWorkflowId,
+      };
+    });
   },
   clear: () => {
     sessionStorage.removeItem(WORKFLOW_STORAGE_KEY);

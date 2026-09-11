@@ -89,6 +89,10 @@ export const testCaseApi = {
     });
   },
 
+  getScriptsByWorkflow(workflowId: string) {
+    return request<ScriptGeneration>(`/api/v1/automation/scripts/by-workflow/${workflowId}`);
+  },
+
   crawlAndGenerate(url: string, options?: {
     page_limit?: number;
     depth_limit?: number;

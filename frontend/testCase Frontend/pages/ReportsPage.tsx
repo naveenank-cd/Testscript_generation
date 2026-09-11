@@ -149,7 +149,13 @@ export function ReportsPage() {
             <span>Refresh Reports</span>
           </button>
           <Link
-            href={selectedProjectId ? `/test-case-generation/automation?projectId=${selectedProjectId}` : '/test-case-generation/automation'}
+            href={
+              selectedProjectId
+                ? selectedWorkflowId
+                  ? `/test-case-generation/automation?projectId=${selectedProjectId}&workflowId=${selectedWorkflowId}`
+                  : `/test-case-generation/automation?projectId=${selectedProjectId}`
+                : '/test-case-generation/automation'
+            }
             className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-bold text-primary-foreground shadow hover:opacity-95 transition"
           >
             <Zap className="h-4 w-4" />
@@ -355,7 +361,13 @@ export function ReportsPage() {
 
           <div className="flex flex-wrap justify-center gap-3 pt-2">
             <Link
-              href={selectedProjectId ? `/test-case-generation/automation?projectId=${selectedProjectId}` : '/test-case-generation/automation'}
+              href={
+                selectedProjectId
+                  ? selectedWorkflowId
+                    ? `/test-case-generation/automation?projectId=${selectedProjectId}&workflowId=${selectedWorkflowId}`
+                    : `/test-case-generation/automation?projectId=${selectedProjectId}`
+                  : '/test-case-generation/automation'
+              }
               className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-xs font-bold text-primary-foreground shadow hover:opacity-95 transition"
             >
               <Zap className="h-4 w-4" />

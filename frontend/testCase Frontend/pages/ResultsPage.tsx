@@ -1,12 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Check, ChevronDown, ChevronUp, Clipboard, Download, RefreshCw, X } from 'lucide-react';
 import { StatePanel } from '../components/StatePanel';
 import { Modal } from '@/components/common/Modal';
 import { ConfidenceBadge, ConfidenceRing, EntityId, StatusBadge, TraceabilityChain } from '../components/TraceabilityUI';
 import { testCaseApi } from '../services/testCaseApi';
+import { projectService } from '@/services/projectService';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { Scenario, TestCase, WorkflowResult } from '../types';
 import { confidencePercent, downloadFile, friendlyError, friendlyId, registerFriendlyIds, setActiveProjectId, testCaseText } from '../utils';
@@ -15,9 +16,23 @@ type Tab = 'scenarios' | 'testCases' | 'validation' | 'traceability';
 
 export function ResultsPage() {
   const router = useRouter();
-  const { projectId, workflowId, result, hydrate, setResult, clear } = useTestCaseWorkflowStore();
+  const searchParams = useSearchParams();
+  const urlWorkflowId = searchParams.get('workflowId') || searchParams.get('generationId');
+  const urlProjectId = searchParams.get('projectId');
+  const {
+    projectId: storeProjectId,
+    workflowId: storeWorkflowId,
+    result,
+    hydrate,
+    setResult,
+    syncContext,
+    clear,
+  } = useTestCaseWorkflowStore();
+  const workflowId = urlWorkflowId || storeWorkflowId;
+  const projectId = urlProjectId || storeProjectId;
+
   const [data, setData] = useState<WorkflowResult | null>(result);
-  const [loading, setLoading] = useState(!result);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [tab, setTab] = useState<Tab>('scenarios');
   const [page, setPage] = useState(1);
@@ -31,13 +46,41 @@ export function ResultsPage() {
   const pageSize = 10;
 
   useEffect(() => hydrate(), [hydrate]);
+
   useEffect(() => {
-    if (!workflowId || data) return;
+    if (urlWorkflowId || urlProjectId) {
+      syncContext(urlProjectId, urlWorkflowId);
+    }
+  }, [urlProjectId, urlWorkflowId, syncContext]);
+
+  useEffect(() => {
+    if (!workflowId) {
+      if (projectId) {
+        setLoading(true);
+        projectService.getGenerations(projectId).then((gens) => {
+          if (Array.isArray(gens) && gens.length > 0) {
+            const latestWf = gens[0].workflow_id;
+            syncContext(projectId, latestWf);
+            testCaseApi.getWorkflowResult(latestWf).then((response) => {
+              setData(response);
+              setResult(response);
+            }).catch((reqErr) => setError(friendlyError(reqErr))).finally(() => setLoading(false));
+          } else {
+            setLoading(false);
+          }
+        }).catch(() => setLoading(false));
+      } else {
+        setLoading(false);
+      }
+      return;
+    }
+
+    setLoading(true);
     testCaseApi.getWorkflowResult(workflowId).then((response) => {
       setData(response);
       setResult(response);
     }).catch((requestError) => setError(friendlyError(requestError))).finally(() => setLoading(false));
-  }, [data, setResult, workflowId]);
+  }, [projectId, setResult, syncContext, workflowId]);
   const scenarios = data?.scenarios ?? [];
   const testCases = data?.test_cases ?? [];
   useEffect(() => {
@@ -156,9 +199,9 @@ export function ResultsPage() {
       .map(tc => tc.functional_area)
       .filter((val): val is string => Boolean(val) && val !== 'Unclassified')
   ));
-  if (!activeWorkflowId) return <StatePanel type="error" title="No workflow result selected" message="Complete a workflow to view its results dashboard." />;
   if (loading) return <StatePanel type="loading" title="Loading results" message="Fetching generated scenarios, test cases, and validation data." />;
   if (error) return <StatePanel type="error" title="Results unavailable" message={error} />;
+  if (!activeWorkflowId) return <StatePanel type="error" title="No workflow result selected" message="Complete a workflow or select a requirement generation to view its results dashboard." />;
   if (!data || (!data.scenarios.length && !data.test_cases.length)) return <StatePanel type="empty" title="No generated results" message="The workflow completed without returning scenarios or test cases." />;
 
   return (
@@ -179,7 +222,17 @@ export function ResultsPage() {
               Workspace
             </button>
           )}
-          <button onClick={() => router.push('/test-case-generation/automation')} className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700">Proceed to Test Scripts</button>
+          <button
+            onClick={() => {
+              const p = new URLSearchParams();
+              if (projectId) p.set('projectId', projectId);
+              if (activeWorkflowId) p.set('workflowId', activeWorkflowId);
+              router.push(`/test-case-generation/automation?${p.toString()}`);
+            }}
+            className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700"
+          >
+            Proceed to Test Scripts
+          </button>
           <button onClick={() => downloadFile(`testcase-results-${activeWorkflowId}.json`, JSON.stringify(data, null, 2), 'application/json')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold hover:bg-muted"><Download className="h-4 w-4" /> Export JSON</button>
           <button onClick={startAnother} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">+ New Generation</button>
         </div>

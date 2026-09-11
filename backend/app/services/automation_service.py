@@ -2864,12 +2864,24 @@ class AutomationService:
             crawl = await cache.get_json(cache.key("crawl", request.crawl_id))
             if crawl:
                 self._crawls[request.crawl_id] = crawl
+        if crawl is None and state.get("project_id"):
+            project_crawl = await self.get_project_crawl_knowledge(state["project_id"])
+            if project_crawl:
+                crawl = project_crawl
+                self._crawls[request.crawl_id] = crawl
         if crawl is None:
             raise AutomationError(
                 "A completed application crawl is required before script generation."
             )
-        if str(crawl.get("workflow_id")) != str(request.workflow_id):
-            raise AutomationError("The selected crawl belongs to a different workflow.")
+        workflow_matches = str(crawl.get("workflow_id", "")) == str(request.workflow_id)
+        project_id = str(state.get("project_id") or "")
+        crawl_pid = str(crawl.get("project_id") or "")
+        project_matches = bool(project_id and crawl_pid and project_id == crawl_pid)
+        if not workflow_matches and not project_matches:
+            project_knowledge = await self.get_project_crawl_knowledge(project_id) if project_id else None
+            is_project_knowledge = bool(project_knowledge and project_knowledge.get("crawl_id") == request.crawl_id)
+            if not is_project_knowledge and str(crawl.get("workflow_id", "")) not in {"", "None", str(request.workflow_id)}:
+                raise AutomationError("The selected crawl belongs to a different project or workflow.")
         if _canonical_page_url(str(crawl.get("application_url"))) != _canonical_page_url(url):
             raise AutomationError("The selected crawl belongs to a different application URL.")
         crawl_report = dict(crawl.get("crawl_report") or {})
@@ -3910,6 +3922,41 @@ class AutomationService:
             self._generations[generation_id] = generation
             return generation
         raise AutomationNotFound("Script generation was not found")
+
+    async def get_generation_by_workflow(self, workflow_id: str | uuid.UUID) -> ScriptGenerationResponse:
+        wid_str = str(workflow_id)
+        # 1. Check in-memory generations
+        for gen_id, gen_data in self._generations.items():
+            resp = gen_data.get("response")
+            if resp and str(getattr(resp, "workflow_id", "")) == wid_str:
+                return resp
+            wf = gen_data.get("workflow") or {}
+            if str(wf.get("workflow_id")) == wid_str and resp:
+                return resp
+
+        # 2. Check disk artifacts
+        if self.artifact_root.is_dir():
+            for gen_dir in self.artifact_root.iterdir():
+                if gen_dir.is_dir():
+                    manifest = gen_dir / "generation.json"
+                    if manifest.is_file():
+                        try:
+                            stored = json.loads(manifest.read_text(encoding="utf-8"))
+                            resp_data = stored.get("response")
+                            wf_data = stored.get("workflow") or {}
+                            if (resp_data and str(resp_data.get("workflow_id")) == wid_str) or str(wf_data.get("workflow_id")) == wid_str:
+                                resp = ScriptGenerationResponse.model_validate(resp_data)
+                                self._generations[resp.generation_id] = {
+                                    "response": resp,
+                                    "workflow": wf_data,
+                                    "directory": gen_dir,
+                                    "learned_locators": stored.get("learned_locators", {}),
+                                }
+                                return resp
+                        except Exception:
+                            continue
+
+        raise AutomationNotFound("No script generation found for this workflow")
 
     async def script_path(self, generation_id: str, script_id: str) -> Path:
         generation = await self.generation(generation_id)

@@ -99,6 +99,11 @@ async def download_script(generation_id: str, script_id: str):
     return FileResponse(path, filename=f"{script_id}.py", media_type="text/x-python")
 
 
+@router.get("/scripts/by-workflow/{workflow_id}", summary="Get existing generated scripts for a workflow")
+async def get_scripts_by_workflow(workflow_id: str):
+    return await automation_service.get_generation_by_workflow(workflow_id)
+
+
 @router.post("/executions", summary="Run scripts automatically or prepare a manual report")
 async def execute_scripts(request: ExecuteScriptsRequest):
     return await automation_service.execute(request)

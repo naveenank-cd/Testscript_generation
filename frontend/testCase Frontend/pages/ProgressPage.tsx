@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Check, Circle, LoaderCircle, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 import { WORKFLOW_STAGES } from '../constants';
 import { testCaseApi } from '../services/testCaseApi';
@@ -13,7 +13,13 @@ import { ConfidenceRing, EntityId, StatusBadge } from '../components/Traceabilit
 
 export function ProgressPage() {
   const router = useRouter();
-  const { workflowId, snapshot, hydrate, setSnapshot, setResult } = useTestCaseWorkflowStore();
+  const searchParams = useSearchParams();
+  const urlWorkflowId = searchParams.get('workflowId');
+  const urlProjectId = searchParams.get('projectId');
+  const { workflowId: storeWorkflowId, projectId: storeProjectId, syncContext, snapshot, hydrate, setSnapshot, setResult } = useTestCaseWorkflowStore();
+  const workflowId = urlWorkflowId || storeWorkflowId;
+  const projectId = urlProjectId || storeProjectId;
+
   const [connection, setConnection] = useState<'connecting' | 'connected' | 'reconnecting' | 'closed'>('connecting');
   const [error, setError] = useState('');
   const [elapsed, setElapsed] = useState(0);
@@ -24,31 +30,42 @@ export function ProgressPage() {
 
   useEffect(() => hydrate(), [hydrate]);
   useEffect(() => {
+    if (urlWorkflowId || urlProjectId) {
+      syncContext(urlProjectId, urlWorkflowId);
+    }
+  }, [urlProjectId, urlWorkflowId, syncContext]);
+
+  useEffect(() => {
     const timer = window.setInterval(() => setElapsed((value) => value + 1), 1000);
     return () => window.clearInterval(timer);
   }, []);
 
   const routeForEvent = useCallback(async (event: WorkflowEvent) => {
     if (!workflowId) return;
+    const params = new URLSearchParams();
+    if (projectId) params.set('projectId', projectId);
+    if (workflowId) params.set('workflowId', workflowId);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+
     if (event.status === 'completed') {
       closeRef.current?.();
       setConnection('closed');
       try {
         const result = await testCaseApi.getWorkflowResult(workflowId);
         setResult(result);
-        router.replace('/test-case-generation/results');
+        router.replace(`/test-case-generation/results${qs}`);
       } catch (requestError) {
         setError(friendlyError(requestError));
       }
     } else if (event.status === 'scenario_manual_review' || event.status === 'testcase_manual_review') {
       closeRef.current?.();
       setConnection('closed');
-      router.replace('/test-case-generation/review');
+      router.replace(`/test-case-generation/review${qs}`);
     } else if (event.status === 'failed' || event.status === 'cancelled') {
       closeRef.current?.();
       setConnection('closed');
     }
-  }, [router, setResult, workflowId]);
+  }, [projectId, router, setResult, workflowId]);
 
   const connect = useCallback(() => {
     if (!workflowId || closeRef.current) return;

@@ -2,18 +2,25 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import Image from 'next/image';
-import { Check, CheckCircle2, Code2, Copy, Download, FileCode, Folder, Layers, LoaderCircle, Play, X, XCircle } from 'lucide-react';
+import { Check, CheckCircle2, Code2, Copy, Download, FileCode, Folder, Layers, LoaderCircle, Play, Sparkles, X, XCircle } from 'lucide-react';
 import { StatePanel } from '../components/StatePanel';
 import { ConfidenceRing, EntityId, StatusBadge, TraceabilityChain } from '../components/TraceabilityUI';
 import { automationArtifactPdfUrl, automationArtifactUrl, testCaseApi } from '../services/testCaseApi';
+import { projectService } from '@/services/projectService';
 import { loadTestProjectArtifacts, saveAutomationActivity, saveTestProjectArtifacts, useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { CrawlAnalysis, DeveloperExecutionReport, ExecutionJob, ExecutionReport, HumanExecutionSession, QaDiagnosticReport, ScriptGeneration, TraceabilityComparisonReport, WorkflowCrawlJob } from '../types';
 import { downloadFile, friendlyError, friendlyId, loadActiveProjectName, registerFriendlyIds, setActiveProjectId } from '../utils';
 
 export function AutomationPage() {
-  const historyMode = useSearchParams().get('view') === 'history';
-  const { workflowId, projectId, setProjectId, hydrate } = useTestCaseWorkflowStore();
+  const searchParams = useSearchParams();
+  const historyMode = searchParams.get('view') === 'history';
+  const urlWorkflowId = searchParams.get('workflowId') || searchParams.get('generationId');
+  const urlProjectId = searchParams.get('projectId');
+  const { workflowId: storeWorkflowId, projectId: storeProjectId, syncContext, setProjectId, hydrate } = useTestCaseWorkflowStore();
+  const workflowId = urlWorkflowId || storeWorkflowId;
+  const projectId = urlProjectId || storeProjectId;
   const [projectName, setProjectName] = useState(() => (typeof window !== 'undefined' ? (loadActiveProjectName(workflowId || undefined) || '') : ''));
   const [applicationUrl, setApplicationUrl] = useState('');
   const [authenticationEmail, setAuthenticationEmail] = useState('');
@@ -75,16 +82,60 @@ export function AutomationPage() {
   }, [applicationUrl, crawlJob?.job_id, executionJob?.job_id, humanSession?.session_id, workflowId]);
 
   useEffect(() => hydrate(), [hydrate]);
+
+  useEffect(() => {
+    if (urlWorkflowId || urlProjectId) {
+      syncContext(urlProjectId, urlWorkflowId);
+    }
+  }, [urlProjectId, urlWorkflowId, syncContext]);
+
+  useEffect(() => {
+    if (!workflowId && projectId) {
+      projectService.getGenerations(projectId).then((gens) => {
+        if (Array.isArray(gens) && gens.length > 0) {
+          const latestWf = gens[0].workflow_id;
+          syncContext(projectId, latestWf);
+        }
+      }).catch(() => undefined);
+    }
+  }, [projectId, syncContext, workflowId]);
+
+  useEffect(() => {
+    if (projectId) {
+      projectService.getProject(projectId).then((p) => {
+        if (p?.name) setProjectName(p.name);
+        if (p?.application_url) setApplicationUrl((prev) => prev || p.application_url || '');
+      }).catch(() => undefined);
+
+      testCaseApi.getProjectCrawlKnowledge(projectId).then((knowledge) => {
+        if (knowledge) {
+          setCrawl((prev) => prev || (knowledge as unknown as CrawlAnalysis));
+          if (knowledge.application_url) setApplicationUrl((prev) => prev || String(knowledge.application_url));
+        }
+      }).catch(() => undefined);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!workflowId) return;
+    testCaseApi.getScriptsByWorkflow(workflowId).then((gen) => {
+      if (gen && gen.scripts?.length) {
+        setGeneration(gen);
+        if (gen.application_url) setApplicationUrl((prev) => prev || gen.application_url || '');
+      }
+    }).catch(() => undefined);
+  }, [workflowId]);
+
   useEffect(() => {
     if (!workflowId) return;
     const saved = loadTestProjectArtifacts(workflowId);
     if (!saved) return;
     queueMicrotask(() => {
-      if (saved.applicationUrl) setApplicationUrl(saved.applicationUrl);
-      if (saved.crawl) setCrawl(saved.crawl);
-      if (saved.generation) { setGeneration(saved.generation); setApplicationUrl(saved.generation.application_url); }
-      if (saved.report) { setReport(saved.report); if (historyMode) setShowTestReport(true); }
-      if (saved.comparison) setComparison(saved.comparison);
+      if (saved.applicationUrl) setApplicationUrl((prev) => prev || saved.applicationUrl || '');
+      if (saved.crawl) setCrawl((prev) => prev || saved.crawl || null);
+      if (saved.generation) { setGeneration((prev) => prev || saved.generation || null); if (saved.generation.application_url) setApplicationUrl(saved.generation.application_url); }
+      if (saved.report) { setReport((prev) => prev || saved.report || null); if (historyMode) setShowTestReport(true); }
+      if (saved.comparison) setComparison((prev) => prev || saved.comparison || null);
       if (saved.crawlJobId) void testCaseApi.getWorkflowCrawlJob(saved.crawlJobId).then((current) => {
         setCrawlJob(current);
         if (current.crawl) setCrawl(current.crawl);
@@ -232,20 +283,28 @@ export function AutomationPage() {
   };
 
   const generate = async () => {
-    if (
-      !workflowId
-      || !crawl
-      || crawl.crawl_status === 'crawl_blocked'
-      || (crawl.pages_crawled === 0 && crawl.discovered_elements.length === 0)
-    ) return;
+    if (!workflowId) return;
     setBusy(true); setError('');
     try {
+      let crawlObj = crawl;
+      if (!crawlObj && projectId) {
+        const projKnowledge = await testCaseApi.getProjectCrawlKnowledge(projectId);
+        if (projKnowledge) {
+          crawlObj = projKnowledge as unknown as CrawlAnalysis;
+          setCrawl(crawlObj);
+        }
+      }
+      if (!crawlObj) {
+        throw new Error('A completed application crawl is required before generating scripts. Please complete the crawl in your project workspace.');
+      }
       const activeProjectName = projectName.trim() || loadActiveProjectName(workflowId);
+      const appUrl = applicationUrl.trim() || crawlObj.application_url || '';
+      const crawlId = crawlObj.crawl_id || (crawlObj as any).id || 'project-crawl';
       const generated = await testCaseApi.generateScripts(
-        workflowId, applicationUrl.trim(), crawl.crawl_id, activeProjectName,
+        workflowId, appUrl, crawlId, activeProjectName,
       );
       setGeneration(generated);
-      saveTestProjectArtifacts(workflowId, generated, report, comparison, crawl);
+      saveTestProjectArtifacts(workflowId, generated, report, comparison, crawlObj);
       setSelectedScript(0);
       setSelectedProjectFile(0);
     } catch (requestError) { setError(friendlyError(requestError)); }
@@ -367,9 +426,88 @@ export function AutomationPage() {
     finally { setBusy(false); }
   };
 
-  if (!workflowId) return <StatePanel type="error" title="No completed workflow selected" message="Return to results and choose Proceed to Test Scripts." />;
+  if (!workflowId) {
+    return (
+      <StatePanel
+        type="error"
+        title="No requirement generation selected"
+        message={
+          projectId
+            ? "This application project doesn't have an active requirement generation selected yet."
+            : "Please select an Application Project and Requirement Generation to view or execute automation scripts."
+        }
+        action={
+          <Link
+            href={projectId ? `/projects/${projectId}` : '/dashboard'}
+            className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-xs font-bold text-primary-foreground shadow transition hover:opacity-90"
+          >
+            {projectId ? 'Return to Application Workspace' : 'View Application Projects'}
+          </Link>
+        }
+      />
+    );
+  }
 
-  const script = generation?.scripts[selectedScript];
+  if (!generation) {
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Test Automation</p>
+            <h1 className="mt-1 text-2xl font-extrabold tracking-tight">Playwright Test Automation</h1>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Project: {projectName || projectId} · Generation: {workflowId.slice(0, 8)}...
+            </p>
+          </div>
+          {projectId && (
+            <Link
+              href={`/projects/${projectId}`}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 py-2 text-xs font-bold hover:bg-muted transition"
+            >
+              Back to Project Workspace
+            </Link>
+          )}
+        </div>
+
+        <div className="rounded-3xl border border-border/80 bg-card p-8 text-center shadow-sm space-y-4">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+            <Code2 className="h-7 w-7" />
+          </div>
+          <div>
+            <h3 className="text-lg font-bold text-foreground">Playwright Automation Scripts Ready to Generate</h3>
+            <p className="mt-1.5 text-xs text-muted-foreground max-w-md mx-auto">
+              Test scenarios and test cases exist for this generation. Generate modular Page Object Model (POM) Playwright scripts mapped to verified application crawl locators.
+            </p>
+          </div>
+          <div className="flex flex-wrap justify-center gap-3 pt-2">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={generate}
+              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-purple-600 px-6 py-3 text-xs font-bold text-white shadow-md shadow-orange-500/20 hover:opacity-95 disabled:opacity-60 transition"
+            >
+              <Sparkles className="h-4 w-4" />
+              <span>{busy ? 'Generating Playwright Scripts…' : 'Generate Playwright Automation Scripts'}</span>
+            </button>
+            <Link
+              href={`/test-case-generation/results?projectId=${projectId || ''}&workflowId=${workflowId}`}
+              className="inline-flex items-center gap-2 rounded-xl border border-border bg-background px-4 py-3 text-xs font-semibold hover:bg-muted transition"
+            >
+              <FileCode className="h-4 w-4" />
+              <span>Review Test Cases</span>
+            </Link>
+          </div>
+          {error && (
+            <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs font-semibold text-red-600 dark:text-red-400 max-w-md mx-auto">
+              {error}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const script = generation.scripts[selectedScript];
   const hasUsableCrawl = Boolean(
     crawl
     && crawl.crawl_status !== 'crawl_blocked'
