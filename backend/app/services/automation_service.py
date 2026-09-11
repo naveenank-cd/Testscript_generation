@@ -52,7 +52,7 @@ from app.services.seacrawl_service import SeacrawlAdapter
 from app.services.cache_service import cache
 from app.services.workflow_service import workflow_service
 from app.services.test_data_service import test_data_engine
-from app.services.project_structure_generator import ProjectStructureGenerator, project_structure_generator
+from app.services.project_structure_generator import ProjectStructureGenerator
 from tests import config as playwright_test_config
 
 R = TypeVar("R")
@@ -703,10 +703,10 @@ def _python_source(
     test_data_formatted = pformat(masked_test_data, width=100, sort_dicts=False)
     for k, v in (test_data or {}).items():
         if v.get("sensitive"):
-            placeholder = f"'value': '__SECRET_PLACEHOLDER__'"
-            placeholder_d = f"'value': \"__SECRET_PLACEHOLDER__\""
-            placeholder_dq = f"\"value\": \"__SECRET_PLACEHOLDER__\""
-            placeholder_dqs = f"\"value\": '__SECRET_PLACEHOLDER__'"
+            placeholder = "'value': '__SECRET_PLACEHOLDER__'"
+            placeholder_d = "'value': \"__SECRET_PLACEHOLDER__\""
+            placeholder_dq = "\"value\": \"__SECRET_PLACEHOLDER__\""
+            placeholder_dqs = "\"value\": '__SECRET_PLACEHOLDER__'"
             safe_env_key = re.sub(r"[^A-Z0-9_]", "_", k.upper().replace(" ", "_")).strip("_")
             env_call = f"'value': os.getenv(\"PLAYWRIGHT_{safe_env_key}\", \"********\")"
             test_data_formatted = (
